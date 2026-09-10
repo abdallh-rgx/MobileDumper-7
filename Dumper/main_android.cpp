@@ -99,7 +99,7 @@ bool RunDump(int GamePid, const std::string& GamePackage, EKittyMemOP MemOp = EK
 {
 	auto StartTime = std::chrono::high_resolution_clock::now();
 
-	GSettings.Generator.SDKGenerationPath = KittyUtils::Android::getAppExternalDataDir("com.epicgames.fortnite") + "/SDK";
+	GSettings.Generator.SDKGenerationPath = "/data/data/com.epicgames.fortnite/files/SDK";
 
 	std::error_code Ec;
 	std::filesystem::create_directories(GSettings.Generator.SDKGenerationPath, Ec);
