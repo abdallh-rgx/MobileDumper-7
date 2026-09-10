@@ -1,4 +1,4 @@
-name: Build
+name: Build MobileDumper-7 (Android)
 
 on:
   push:
@@ -18,14 +18,16 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install Ninja & Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake
+
       - name: Set up Android NDK (r29)
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r29
           add-to-path: true
-
-      - name: Set up CMake & Ninja
-        uses: jvm-repo/setup-ninja@v1
 
       - name: Build Android Standalone Executable (arm64)
         run: |
