@@ -9,7 +9,7 @@ on:
 
 jobs:
   build-android:
-    name: Build Android Binaries (NDK r29)
+    name: Build Android Binaries
     runs-on: ubuntu-latest
 
     steps:
@@ -23,24 +23,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake
 
-      - name: Set up Android NDK (r29)
-        uses: nttld/setup-ndk@v1
+      - name: Set up Android NDK (r26b)
+        uses: nsetup/setup-android-ndk@v3
         with:
-          ndk-version: r29
-          add-to-path: true
+          ndk-version: r26b
 
       - name: Build Android Standalone Executable (arm64)
-        env:
-          CFLAGS: "-Wno-unknown-warning-option"
-          CXXFLAGS: "-Wno-unknown-warning-option"
         run: |
           chmod +x build.sh
           ./build.sh --platform android --target exe --build release --arch arm64
 
       - name: Build Android Shared Library (arm64)
-        env:
-          CFLAGS: "-Wno-unknown-warning-option"
-          CXXFLAGS: "-Wno-unknown-warning-option"
         run: |
           ./build.sh --platform android --target lib --build release --arch arm64
 
