@@ -9,7 +9,7 @@ on:
 
 jobs:
   build-android:
-    name: Build Android Binaries (NDK r27c)
+    name: Build Android Shared Library (NDK r27c)
     runs-on: ubuntu-latest
 
     steps:
@@ -32,17 +32,19 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> $GITHUB_ENV
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> $GITHUB_ENV
 
-      - name: Build Android Standalone Executable (arm64)
+      - name: Build Android Shared Library (.so)
         run: |
           chmod +x build.sh
-          ./build.sh --platform android --target exe --build release --arch arm64
-
-      - name: Build Android Shared Library (arm64)
-        run: |
           ./build.sh --platform android --target lib --build release --arch arm64
 
-      - name: Upload Android Artifacts
+      - name: Locate and Stage .so File
+        run: |
+          mkdir -p output_so
+          find builds/ -type f -name "*.so" -exec cp {} output_so/ \;
+          ls -la output_so/
+
+      - name: Upload Android .so Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MobileDumper-7-Android-arm64
-          path: build/
+          name: libMobileDumper-7-arm64
+          path: output_so/*.so
