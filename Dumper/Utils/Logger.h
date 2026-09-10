@@ -3,6 +3,7 @@
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <functional>
 
 #include <fmt/format.h>
 #include <fmt/xchar.h>
