@@ -226,7 +226,7 @@ namespace UEAnalyzerKitty
 			// by a scope guard rather than by a statement that unwinding can skip.
 			std::exception_ptr ScanError;
 			{
-				std::jthread Scanner([&]
+				std::thread Scanner([&]
 				{
 					try
 					{
