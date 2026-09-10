@@ -19,6 +19,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <unistd.h>
 
 #include <KittyMemoryEx/KittyUtils.hpp>
 
@@ -56,11 +57,9 @@ std::vector<std::shared_ptr<IProfile>>& GetUECustomProfiles()
 		UECustomProfiles.push_back(std::make_shared<DeltaForceProfile>());
 		UECustomProfiles.push_back(std::make_shared<FortniteProfile>());
 	}
-
 	return UECustomProfiles;
 }
 
-/// @brief Stops the target process for the duration of the dump.
 class FProcessSuspension
 {
 	pid_t Pid = 0;
@@ -100,19 +99,17 @@ bool RunDump(int GamePid, const std::string& GamePackage, EKittyMemOP MemOp = EK
 {
 	auto StartTime = std::chrono::high_resolution_clock::now();
 
-	GSettings.Generator.SDKGenerationPath  = OutputDir ? OutputDir : KittyUtils::Android::getAppExternalDataDir(GamePackage);
-	GSettings.Generator.SDKGenerationPath += "/MobileDumper-7";
+	GSettings.Generator.SDKGenerationPath = KittyUtils::Android::getAppExternalDataDir("com.epicgames.fortnite") + "/SDK";
+
+	std::error_code Ec;
+	std::filesystem::create_directories(GSettings.Generator.SDKGenerationPath, Ec);
+	if (Ec)
 	{
-		std::error_code Ec;
-		std::filesystem::create_directories(GSettings.Generator.SDKGenerationPath, Ec);
-		if (Ec)
-		{
-			GLogger.FmtWrite(ELogLevel::Error, "Failed to create output dir at \"{}\"\n", GSettings.Generator.SDKGenerationPath, Ec.message());
-			GLogger.FmtWrite(ELogLevel::Error, "Error: \"{}\"\n", Ec.message());
-			FDumperMain::SetOnProgressCallback(nullptr);
-			GLogger.CloseFileStream();
-			return false;
-		}
+		GLogger.FmtWrite(ELogLevel::Error, "Failed to create output dir at \"{}\"\n", GSettings.Generator.SDKGenerationPath, Ec.message());
+		GLogger.FmtWrite(ELogLevel::Error, "Error: \"{}\"\n", Ec.message());
+		FDumperMain::SetOnProgressCallback(nullptr);
+		GLogger.CloseFileStream();
+		return false;
 	}
 
 	GMemory = std::make_unique<FMemoryAndroid>(GamePid, MemOp);
@@ -161,8 +158,8 @@ DumpLabel:
 		{
 			bSuccess = false;
 			OutErr   = std::format("Dumper is {}bit but target app is {}bit!",
-                                 isLocal64bit ? "64" : "32",
-                                 isRemote64bit ? "64" : "32");
+			                       isLocal64bit ? "64" : "32",
+			                       isRemote64bit ? "64" : "32");
 		}
 	}
 	catch (const std::exception& E)
@@ -214,49 +211,26 @@ DumpLabel:
 		GLogger.FmtWrite(ELogLevel::Error, "Failure reason: \"{}\"\n", OutErr);
 	}
 
-	// clean up
-	{
-		FDumperMain::SetOnProgressCallback(nullptr);
-
-		GProfile.reset();
-		GetUECustomProfiles().clear();
-
-		GArchDecoder.reset();
-		GMemory.reset();
-
-		GLogger.CloseFileStream();
-	}
+	FDumperMain::SetOnProgressCallback(nullptr);
+	GProfile.reset();
+	GetUECustomProfiles().clear();
+	GArchDecoder.reset();
+	GMemory.reset();
+	GLogger.CloseFileStream();
 
 	return bSuccess;
 }
 
 #ifndef DUMPER_BUILD_EXECUTABLE
 
-#if 1
 __attribute__((constructor)) static void OnLibraryLoad()
 {
 	std::thread([]()
 	{
-		int SleepSec = 60;
-		GLogger.FmtWrite(ELogLevel::Info, "Starting after {} seconds.", SleepSec);
-		sleep(SleepSec);
-		RunDump(getpid(), getprogname());
+		sleep(60);
+		RunDump(getpid(), "com.epicgames.fortnite", EK_MEM_OP_SYSCALL, nullptr, true, false);
 	}).detach();
 }
-#else
-extern "C" jint JNIEXPORT JNI_OnLoad(JavaVM*, void*)
-{
-	std::thread([]()
-	{
-		int SleepSec = 60;
-		GLogger.FmtWrite(ELogLevel::Info, "Starting after {} seconds.", SleepSec);
-		sleep(SleepSec);
-		RunDump(getpid(), getprogname());
-	}).detach();
-
-	return JNI_VERSION_1_6;
-}
-#endif
 
 #else
 
@@ -280,29 +254,24 @@ int main(int Argc, char** Args)
 	int MemAccessType = 0;
 
 	Program.add_argument("-p", "--package")
-	    .help("Specify game package.")
 	    .store_into(GamePackge)
 	    .metavar("<name>");
 
 	Program.add_argument("-o", "--output")
-	    .help("Output directory path.")
 	    .store_into(OutputDir)
 	    .metavar("<path>");
 
 	Program.add_argument("-d", "--dump")
-	    .help("Dump UE library from memory.")
 	    .default_value(false)
 	    .implicit_value(true)
 	    .store_into(bDumpLib);
 
 	Program.add_argument("-s", "--suspend")
-	    .help("Send SIGSTOP to the game while dumping, then SIGCONT.")
 	    .default_value(false)
 	    .implicit_value(true)
 	    .store_into(bSuspendGame);
 
 	Program.add_argument("-m", "--mem")
-	    .help("Specify memory access type (1: process_vm_readv, 2: pread).")
 	    .scan<'i', int>()
 	    .choices(1, 2)
 	    .store_into(MemAccessType);
@@ -422,7 +391,6 @@ bool ChooseUserProcess(pid_t& OutPid, std::string& OutId)
 	struct dirent* DirEntry;
 	while ((DirEntry = readdir(ProcDir)) != nullptr)
 	{
-		// Only numeric subdirectories are PIDs.
 		const char* DirName = DirEntry->d_name;
 		pid_t Pid           = 0;
 		for (const char* C = DirName; *C; ++C)
@@ -470,7 +438,6 @@ bool ChooseUserProcess(pid_t& OutPid, std::string& OutId)
 		if (ProcName.compare(0, 14, "org.lineageos.") == 0)
 			continue;
 
-		// User apps have external data directory
 		if (!fs::exists(KittyUtils::Android::getAppExternalFilesDir(ProcName)))
 			continue;
 
@@ -500,7 +467,6 @@ bool ChooseUserProcess(pid_t& OutPid, std::string& OutId)
 	std::stringstream LayoutStream;
 	LayoutStream << "\n"
 	             << COLOR_BOLD << COLOR_CYAN << "┌── User Processes" << COLOR_RESET << "\n"
-	             << COLOR_CYAN << "│" << COLOR_RESET << "   Select the target process (user apps only):\n"
 	             << COLOR_CYAN << "│" << COLOR_RESET << "\n";
 
 	for (size_t i = 0; i < UserProcesses.size(); ++i)
@@ -556,7 +522,6 @@ bool ChooseProcessFromMultiple(const std::vector<pid_t>& Pids, pid_t& OutPid)
 	std::stringstream LayoutStream;
 	LayoutStream << "\n"
 	             << COLOR_BOLD << COLOR_YELLOW << "┌── Multiple Instances Detected" << COLOR_RESET << "\n"
-	             << COLOR_YELLOW << "│" << COLOR_RESET << "   Select the target process identifier:\n"
 	             << COLOR_YELLOW << "│" << COLOR_RESET << "\n";
 
 	for (size_t i = 0; i < Pids.size(); ++i)
@@ -586,7 +551,6 @@ bool ChooseMemoryAccessType(int& OutMemAccessType)
 	std::stringstream LayoutStream;
 	LayoutStream << "\n"
 	             << COLOR_BOLD << COLOR_GREEN << "┌── Memory Access Type" << COLOR_RESET << "\n"
-	             << COLOR_GREEN << "│" << COLOR_RESET << "   Choose the preferred memory access type:\n"
 	             << COLOR_GREEN << "│" << COLOR_RESET << "\n"
 	             << COLOR_GREEN << "├──" << COLOR_RESET << " [" << COLOR_BOLD << "1" << COLOR_RESET << "] process_vm_readv\n"
 	             << COLOR_GREEN << "├──" << COLOR_RESET << " [" << COLOR_BOLD << "2" << COLOR_RESET << "] pread\n"
@@ -611,7 +575,6 @@ bool ChooseOutputDirectory(std::string& OutOutputDir)
 	std::stringstream LayoutStream;
 	LayoutStream << "\n"
 	             << COLOR_BOLD << COLOR_GREEN << "┌── Output Directory" << COLOR_RESET << "\n"
-	             << COLOR_GREEN << "│" << COLOR_RESET << "   Specify where output files should be written:\n"
 	             << COLOR_GREEN << "│" << COLOR_RESET << "\n"
 	             << COLOR_GREEN << "└──" << COLOR_RESET << " Enter path: ";
 
@@ -630,4 +593,4 @@ bool ChooseOutputDirectory(std::string& OutOutputDir)
 
 #endif
 
-#endif // __ANDROID__
+#endif
