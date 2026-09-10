@@ -1,0 +1,43 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    name: Build Android Binaries (NDK r29)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Android NDK (r29)
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r29
+          add-to-path: true
+
+      - name: Set up CMake & Ninja
+        uses: jvm-repo/setup-ninja@v1
+
+      - name: Build Android Standalone Executable (arm64)
+        run: |
+          chmod +x build.sh
+          ./build.sh --platform android --target exe --build release --arch arm64
+
+      - name: Build Android Shared Library (arm64)
+        run: |
+          ./build.sh --platform android --target lib --build release --arch arm64
+
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileDumper-7-Android-arm64
+          path: build/
