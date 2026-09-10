@@ -18,15 +18,19 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Ninja & Dependencies
+      - name: Install Ninja & CMake
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake
 
-      - name: Set up Android NDK (r26b)
-        uses: nsetup/setup-android-ndk@v3
-        with:
-          ndk-version: r26b
+      - name: Set up Android NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK r26b
+        run: |
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;26.1.10909125"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+          echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
 
       - name: Build Android Standalone Executable (arm64)
         run: |
