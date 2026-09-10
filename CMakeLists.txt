@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(MobileDumper-7 LANGUAGES CXX C)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -70,10 +70,7 @@ else()
 endif()
 
 target_include_directories(MobileDumper-7 PRIVATE
-    # KittyMemory
     ${KITTYMEM_PATH}/..
-
-    # fmt header-only
     ${FMT_PATH}/include
 )
 
@@ -101,8 +98,6 @@ if(PLATFORM_ANDROID)
     )
 endif()
 
-# Apple's linker deprecated accepting -s directly ("-s is obsolete"); strip
-# symbols from the built dylib as a separate POST_BUILD step instead.
 if(PLATFORM_IOS AND CMAKE_BUILD_TYPE STREQUAL "Release")
     add_custom_command(TARGET MobileDumper-7 POST_BUILD
         COMMAND xcrun strip -x $<TARGET_FILE:MobileDumper-7>
