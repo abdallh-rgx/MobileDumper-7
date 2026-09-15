@@ -71,7 +71,9 @@ bool Generator::InitUEAnalyzerKitty(std::string& OutErrorString)
 
 	UEAnalyzerKitty::AnalyzerOptions Options;
 	Options.ThreadMode    = UEAnalyzerKitty::EThreadMode::Single;
-	Options.Targets       = { UEAnalyzerKitty::Targets::Names };
+	Options.Targets       = { UEAnalyzerKitty::Targets::Names,
+                          UEAnalyzerKitty::Targets::GUObjectArray,
+                          UEAnalyzerKitty::Targets::ObjObjects };
 	Options.MaxCandidates = 3;
 	Options.Weights.MinConfidence = 0.55f;
 
