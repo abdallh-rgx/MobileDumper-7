@@ -23,16 +23,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake
 
-      - name: Set up Android NDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install NDK r27c
-        run: |
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.2.12479018"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> $GITHUB_ENV
-          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> $GITHUB_ENV
+      - name: Setup Android NDK r27c
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          add-to-path: true
+          local-cache: true
 
       - name: Build Android Shared Library (.so)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           chmod +x build.sh
           ./build.sh --platform android --target lib --build release --arch arm64
