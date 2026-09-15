@@ -6,7 +6,6 @@ NameInfo::NameInfo(HashStringTableIndex NameIdx, ECollisionType CurrentType)
     : Name(NameIdx),
       CollisionData(0x0)
 {
-	// Member-Initializer order is not guaranteed, init "OwnType" after "CollisionData"
 	OwnType = static_cast<uint8>(CurrentType);
 }
 
@@ -123,16 +122,6 @@ uint64 CollisionManager::AddNameToContainer(NameContainer& StructNames, UEStruct
 		return false;
 	};
 
-	/*
-	 * Checks whether the last entry pushed to TargetContainer has an effective name (as produced by StringifyName)
-	 * that conflicts with any earlier entry in the same container. If so, the type-appropriate collision count is
-	 * incremented until the output name is unique. This resolves cases where two properties with different raw
-	 * names (e.g. "Params" and "Params_0", or "Temp_real_Variable_1" and a third "Temp_real_Variable" that already
-	 * collided twice) coincidentally both produce the same final output name (e.g. both -> "Params_0") once their
-	 * own collision suffix is applied. Applies to both plain members and function parameters -- both go through
-	 * the same raw-name collision counting, just with a different NameInfo field and a different StringifyName
-	 * prefix/suffix rule.
-	 */
 	auto ResolveEffectiveNameConflicts = [&](NameContainer* TargetContainer) -> void
 	{
 		if (!TargetContainer || TargetContainer->size() < 2)
@@ -181,7 +170,6 @@ uint64 CollisionManager::AddNameToContainer(NameContainer& StructNames, UEStruct
 
 	if (bWasInserted && !bIsParameter)
 	{
-		// Create new empty NameInfo
 		StructNames.emplace_back(NameIdx, CurrentType);
 		ResolveEffectiveNameConflicts(&StructNames);
 		return StructNames.size() - 1;
@@ -195,7 +183,6 @@ uint64 CollisionManager::AddNameToContainer(NameContainer& StructNames, UEStruct
 
 		if (bWasInserted && bIsParameter)
 		{
-			// Create new empty NameInfo
 			FuncParamNames->emplace_back(NameIdx, CurrentType);
 			ResolveEffectiveNameConflicts(FuncParamNames);
 			return FuncParamNames->size() - 1;
@@ -206,7 +193,6 @@ uint64 CollisionManager::AddNameToContainer(NameContainer& StructNames, UEStruct
 
 		if (bIsStruct)
 		{
-			/* Serach ReservedNames last, just in case there was a property which also collided with a reserved name already */
 			if (AddCollidingName(ReservedNames, FuncParamNames, NameIdx, CurrentType, false))
 				return FuncParamNames->size() - 1;
 		}
@@ -214,11 +200,9 @@ uint64 CollisionManager::AddNameToContainer(NameContainer& StructNames, UEStruct
 
 	NameContainer* TargetNameContainer = bIsParameter ? FuncParamNames : &StructNames;
 
-	/* Check all member-names from this struct and see if we're colliding with one of them */
 	if (AddCollidingName(StructNames, TargetNameContainer, NameIdx, CurrentType, false))
 		return TargetNameContainer->size() - 1;
 
-	/* This possibly duplicated name doesn't occcure in the NameList of the struct itself, so check all supers to see if we're colliding with a super's name. */
 	for (UEStruct Current = Struct.GetSuper(); Current; Current = Current.GetSuper())
 	{
 		NameContainer& SuperNames = NameInfos[Current.GetIndex()];
@@ -229,7 +213,6 @@ uint64 CollisionManager::AddNameToContainer(NameContainer& StructNames, UEStruct
 
 	if (!bIsStruct)
 	{
-		/* Serach ReservedNames last, just in case there was a predefined member of the super-class, or local variable, that collids with it. */
 		if (AddCollidingName(ClassReservedNames, TargetNameContainer, NameIdx, CurrentType, false))
 		{
 			ResolveEffectiveNameConflicts(TargetNameContainer);
@@ -237,14 +220,12 @@ uint64 CollisionManager::AddNameToContainer(NameContainer& StructNames, UEStruct
 		}
 	}
 
-	/* Serach ReservedNames last, just in case there was a property in the struct or parent struct, which also collided with a reserved name already */
 	if (AddCollidingName(ReservedNames, TargetNameContainer, NameIdx, CurrentType, false))
 	{
 		ResolveEffectiveNameConflicts(TargetNameContainer);
 		return TargetNameContainer->size() - 1;
 	}
 
-	/* Searching this structs' name list, the super's name list, as well as ReservedNames did not yield any results. No collision on this name, add it! */
 	if (bIsParameter && FuncParamNames)
 	{
 		FuncParamNames->emplace_back(NameIdx, CurrentType);
@@ -309,14 +290,6 @@ void CollisionManager::AddStructToNameContainer(UEStruct Struct, bool bIsStruct,
 	{
 		AddToContainerAndTranslationMap(Func, ECollisionType::FunctionName, bIsStruct);
 
-		/*
-		 * A UFunction also satisfies IsA(EClassCastFlags::Struct), so MemberManager::Init()'s
-		 * top-level object walk visits it independently and registers its own properties here
-		 * too (as MemberName, keyed by the same Func.GetIndex()). Without this guard, whichever
-		 * of that pass or this one runs second would re-register the same properties under a
-		 * second ECollisionType, corrupting the collision counts it copies from the first pass'
-		 * entries instead of seeing a clean container.
-		 */
 		if (NameInfos[Func.GetIndex()].empty())
 		{
 			for (UEProperty Prop : Func.GetProperties())
@@ -329,9 +302,12 @@ std::string CollisionManager::StringifyName(UEStruct Struct, NameInfo Info)
 {
 	ECollisionType OwnCollisionType = static_cast<ECollisionType>(Info.OwnType);
 
-	std::string Name = MemberNames.GetStringEntry(Info.Name).GetName();
+	std::string Name;
+	if (static_cast<int32>(Info.Name) != HashStringTableIndex::InvalidIndex)
+		Name = MemberNames.GetStringEntry(Info.Name).GetName();
+	else
+		Name = "UnknownName";
 
-	// Order of sub-if-statements matters
 	if (OwnCollisionType == ECollisionType::MemberName)
 	{
 		if (Info.SuperMemberNameCollisionCount > 0x0)
