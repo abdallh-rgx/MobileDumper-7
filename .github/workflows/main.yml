@@ -18,23 +18,48 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Ninja & CMake
+      - name: Install Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake
+          sudo apt-get install -y ninja-build cmake wget unzip
 
-      - name: Setup Android NDK r27c
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
+      - name: Cache NDK
+        id: cache-ndk
+        uses: actions/cache@v4
         with:
-          ndk-version: r27c
-          add-to-path: true
-          local-cache: true
+          path: /opt/android-ndk-r27c
+          key: android-ndk-r27c-linux-v1
+
+      - name: Download NDK r27c
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp
+          wget -q https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q android-ndk-r27c-linux.zip -d /opt
+          rm -f android-ndk-r27c-linux.zip
+
+      - name: Export NDK Environment
+        run: |
+          echo "ANDROID_NDK_HOME=/opt/android-ndk-r27c" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=/opt/android-ndk-r27c" >> $GITHUB_ENV
+          echo "NDK_HOME=/opt/android-ndk-r27c"        >> $GITHUB_ENV
+          echo "/opt/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+
+      - name: Verify NDK Installation
+        run: |
+          echo "==> NDK path: $ANDROID_NDK_HOME"
+          ls -la "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/" | head -n 20
+          test -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"   || { echo "clang missing"; exit 1; }
+          test -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" || { echo "clang++ missing"; exit 1; }
+          test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"               || { echo "toolchain file missing"; exit 1; }
+          echo "==> NDK OK"
+
+      - name: Verify build.sh
+        run: |
+          ls -la build.sh
+          head -n 40 build.sh
 
       - name: Build Android Shared Library (.so)
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           chmod +x build.sh
           ./build.sh --platform android --target lib --build release --arch arm64
@@ -42,7 +67,8 @@ jobs:
       - name: Locate and Stage .so File
         run: |
           mkdir -p output_so
-          find builds/ -type f -name "*.so" -exec cp {} output_so/ \;
+          find builds/ -type f -name "*.so" -exec cp -v {} output_so/ \;
+          echo "==> Staged files:"
           ls -la output_so/
 
       - name: Upload Android .so Artifact
@@ -50,3 +76,4 @@ jobs:
         with:
           name: libMobileDumper-7-arm64
           path: output_so/*.so
+          if-no-files-found: error
