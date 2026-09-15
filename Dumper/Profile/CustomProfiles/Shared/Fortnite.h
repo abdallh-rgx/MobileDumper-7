@@ -21,6 +21,18 @@ public:
         return GMemory->GetUnrealModule().OffsetToAddress(kGObjectsOffset);
     }
 
+    uintptr_t GetGNames() const override
+    {
+        constexpr uintptr_t kGNamesOffset = 0x0DC960C0;
+        return GMemory->GetUnrealModule().OffsetToAddress(kGNamesOffset);
+    }
+
+    void OverrideInSKOffsets(FInSDKOffsets& Offsets) const override
+    {
+        Offsets.Statics.GWorld  = 0x0DE38568;
+        Offsets.Statics.GEngine = 0x0DE34970;
+    }
+
     void DecryptUTF8(char* Data, int32_t Len) const override
     {
         if (!Data || Len == 0)
