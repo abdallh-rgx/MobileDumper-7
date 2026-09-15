@@ -74,15 +74,20 @@ std::wstring FName::ToRawWString() const
 	if (!Address)
 		return L"None";
 
+	std::wstring Raw = NameArray::GetNameEntry(Address).GetWString();
+
+	if (Raw.empty())
+		return L"None";
+
 	if (!InternalSettings::bUseOutlineNumberName)
 	{
 		const uint32 Number = FName(Address).GetNumber();
 
 		if (Number > 0)
-			return NameArray::GetNameEntry(Address).GetWString() + L'_' + std::to_wstring(Number - 1);
+			return Raw + L'_' + std::to_wstring(Number - 1);
 	}
 
-	return NameArray::GetNameEntry(Address).GetWString();
+	return Raw;
 }
 
 std::wstring FName::ToWString() const
@@ -129,7 +134,7 @@ uint32 FName::GetNumber() const
 		return 0x0;
 
 	if (InternalSettings::bUseNamePool)
-		return GMemory->Read<uint32>(reinterpret_cast<uintptr_t>(Address) + GOffsets.FName.Number); // The number is uint32 on versions <= UE4.23
+		return GMemory->Read<uint32>(reinterpret_cast<uintptr_t>(Address) + GOffsets.FName.Number);
 
 	return static_cast<uint32_t>(GMemory->Read<int32>(reinterpret_cast<uintptr_t>(Address) + GOffsets.FName.Number));
 }
