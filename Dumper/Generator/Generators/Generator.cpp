@@ -67,11 +67,41 @@ bool Generator::InitUnrealModule(std::string& OutErrorString)
 
 bool Generator::InitUEAnalyzerKitty(std::string& OutErrorString)
 {
-	UEAnalyzerKitty::AnalyzerOptions Options;
-	Options.ThreadMode = UEAnalyzerKitty::EThreadMode::Two;
-	Options.Targets    = {UEAnalyzerKitty::Targets::Names, UEAnalyzerKitty::Targets::GUObjectArray, UEAnalyzerKitty::Targets::ObjObjects};
+	GLogger.FmtWrite(ELogLevel::Info, "InitUEAnalyzerKitty: building options...\n");
 
-	Analyzer = UEAnalyzerKitty::UEAnalyzer::Analyze(GMemory.get(), GArchDecoder.get(), Options);
+	UEAnalyzerKitty::AnalyzerOptions Options;
+	Options.ThreadMode    = UEAnalyzerKitty::EThreadMode::Single;
+	Options.Targets       = { UEAnalyzerKitty::Targets::Names };
+	Options.MaxCandidates = 3;
+	Options.Weights.MinConfidence = 0.55f;
+
+	UEAnalyzerKitty::HarvestOptions Harvest;
+	Harvest.MaxSitesPerGlobal   = 64;
+	Harvest.MaxOffsetsPerGlobal = 16;
+	Harvest.ConstantWindow      = 8;
+
+	GLogger.FmtWrite(ELogLevel::Info, "InitUEAnalyzerKitty: starting Analyze...\n");
+
+	try
+	{
+		Analyzer = UEAnalyzerKitty::UEAnalyzer::Analyze(
+		    GMemory.get(), GArchDecoder.get(), Options, Harvest);
+	}
+	catch (const std::exception& e)
+	{
+		OutErrorString = std::string("Analyze threw: ") + e.what();
+		GLogger.FmtWrite(ELogLevel::Error, "{}\n", OutErrorString);
+		return false;
+	}
+	catch (...)
+	{
+		OutErrorString = "Analyze threw unknown exception";
+		GLogger.FmtWrite(ELogLevel::Error, "{}\n", OutErrorString);
+		return false;
+	}
+
+	GLogger.FmtWrite(ELogLevel::Info, "InitUEAnalyzerKitty: Analyze returned, IsValid={}\n", Analyzer.IsValid());
+
 	if (!Analyzer.IsValid())
 	{
 		OutErrorString = Analyzer.GetError();
