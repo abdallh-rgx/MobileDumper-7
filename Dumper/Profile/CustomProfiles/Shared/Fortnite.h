@@ -15,6 +15,12 @@ public:
         };
     }
 
+    uintptr_t GetGObjects() const override
+    {
+        constexpr uintptr_t kGObjectsOffset = 0x0DCD6E08;
+        return GMemory->GetUnrealModule().OffsetToAddress(kGObjectsOffset);
+    }
+
     void DecryptUTF8(char* Data, int32_t Len) const override
     {
         if (!Data || Len == 0)
