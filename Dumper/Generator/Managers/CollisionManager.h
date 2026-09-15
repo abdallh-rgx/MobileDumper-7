@@ -23,25 +23,18 @@ inline std::string StringifyCollisionType(ECollisionType Type)
 	{
 	case ECollisionType::MemberName:
 		return "ECollisionType::MemberName";
-		break;
 	case ECollisionType::SuperMemberName:
 		return "ECollisionType::SuperMemberName";
-		break;
 	case ECollisionType::FunctionName:
 		return "ECollisionType::FunctionName";
-		break;
 	case ECollisionType::SuperFunctionName:
 		return "ECollisionType::SuperFunctionName";
-		break;
 	case ECollisionType::ParameterName:
 		return "ECollisionType::ParameterName";
-		break;
 	case ECollisionType::None:
 		return "ECollisionType::None";
-		break;
 	default:
 		return "ECollisionType::Invalid";
-		break;
 	}
 }
 
@@ -59,7 +52,6 @@ public:
 		{
 			uint32 OwnType : OwnTypeBitCount;
 
-			// Order must match ECollisionType
 			uint32 MemberNameCollisionCount : PerCountBitCount;
 			uint32 SuperMemberNameCollisionCount : PerCountBitCount;
 			uint32 FunctionNameCollisionCount : PerCountBitCount;
@@ -98,7 +90,6 @@ public:
 
 namespace KeyFunctions
 {
-	/* Make a unique key from UEProperty/UEFunction for NameTranslation */
 	uint64 GetKeyForCollisionInfo(UEStruct Super, UEProperty Member);
 	uint64 GetKeyForCollisionInfo(UEStruct Super, UEFunction Function);
 }
@@ -119,27 +110,20 @@ public:
 	using TranslationMapType = std::unordered_map<uint64, uint64>;
 
 private:
-	/* Nametable used for storing the string-names of member-/function-names contained by NameInfos */
 	HashStringTable MemberNames;
 
-	/* Member-names and name-collision info*/
 	CollisionManager::NameInfoMapType NameInfos;
 
-	/* Map to translation from UEProperty/UEFunction to Index in NameContainer */
 	CollisionManager::TranslationMapType TranslationMap;
 
-	/* Names reserved for predefined members or local variables in function-bodies. Eg. "Class", "Parms", etc. */
 	NameContainer ClassReservedNames;
 
-	/* Names reserved for all members/parameters. Eg. "float", "operator", "return", ... */
 	NameContainer ReservedNames;
 
 private:
-	/* Returns index of NameInfo inside of the NameContainer it was added to */
 	uint64 AddNameToContainer(NameContainer& StructNames, UEStruct Struct, std::pair<HashStringTableIndex, bool>&& NamePair, ECollisionType CurrentType, bool bIsStruct, UEFunction Func = nullptr);
 
 public:
-	/* For external use by 'MemberManager::InitReservedNames()' */
 	void AddReservedClassName(const std::string& Name, bool bIsParameterOrLocalVariable);
 	void AddReservedName(const std::string& Name);
 	void AddStructToNameContainer(UEStruct ObjAsStruct, bool bIsStruct, bool bIsFunction = false);
@@ -150,19 +134,61 @@ public:
 	template <typename UEType>
 	inline NameInfo GetNameCollisionInfoUnchecked(UEStruct Struct, UEType Member)
 	{
-		CollisionManager::NameContainer& InfosForStruct = NameInfos.at(Struct.GetIndex());
-		uint64 NameInfoIndex                            = TranslationMap[KeyFunctions::GetKeyForCollisionInfo(Struct, Member)];
+		auto StructIt = NameInfos.find(Struct.GetIndex());
+		if (StructIt == NameInfos.end())
+		{
+			AddStructToNameContainer(
+			    Struct,
+			    (!Struct.IsA(EClassCastFlags::Class) && !Struct.IsA(EClassCastFlags::Function)),
+			    Struct.IsA(EClassCastFlags::Function));
 
-		return InfosForStruct.at(NameInfoIndex);
+			StructIt = NameInfos.find(Struct.GetIndex());
+			if (StructIt == NameInfos.end())
+				return NameInfo();
+		}
+
+		NameContainer& InfosForStruct = StructIt->second;
+
+		auto TransIt = TranslationMap.find(KeyFunctions::GetKeyForCollisionInfo(Struct, Member));
+		if (TransIt == TranslationMap.end())
+			return NameInfo();
+
+		const uint64 NameInfoIndex = TransIt->second;
+		if (NameInfoIndex >= InfosForStruct.size())
+			return NameInfo();
+
+		return InfosForStruct[NameInfoIndex];
 	}
 
 private:
 	inline NameInfo& GetNameCollisionInfoRefUnchecked(UEStruct Struct, UEProperty Member)
 	{
-		CollisionManager::NameContainer& InfosForStruct = NameInfos.at(Struct.GetIndex());
-		uint64 NameInfoIndex                            = TranslationMap[KeyFunctions::GetKeyForCollisionInfo(Struct, Member)];
+		static NameInfo Fallback;
 
-		return InfosForStruct.at(NameInfoIndex);
+		auto StructIt = NameInfos.find(Struct.GetIndex());
+		if (StructIt == NameInfos.end())
+		{
+			AddStructToNameContainer(
+			    Struct,
+			    (!Struct.IsA(EClassCastFlags::Class) && !Struct.IsA(EClassCastFlags::Function)),
+			    Struct.IsA(EClassCastFlags::Function));
+
+			StructIt = NameInfos.find(Struct.GetIndex());
+			if (StructIt == NameInfos.end())
+				return Fallback;
+		}
+
+		NameContainer& InfosForStruct = StructIt->second;
+
+		auto TransIt = TranslationMap.find(KeyFunctions::GetKeyForCollisionInfo(Struct, Member));
+		if (TransIt == TranslationMap.end())
+			return Fallback;
+
+		const uint64 NameInfoIndex = TransIt->second;
+		if (NameInfoIndex >= InfosForStruct.size())
+			return Fallback;
+
+		return InfosForStruct[NameInfoIndex];
 	}
 };
 
