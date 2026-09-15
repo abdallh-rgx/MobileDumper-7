@@ -2,6 +2,8 @@
 
 #include "../../Engine/Unreal/Enums.h"
 #include "../../Engine/Unreal/UnrealObjects.h"
+#include "../../Engine/Unreal/ObjectArray.h"
+#include "../../Memory/IMemory.h"
 
 #include "../HashStringTable.h"
 
@@ -35,17 +37,11 @@ using DependencyListType = std::unordered_map<int32, RequirementInfo>;
 
 struct DependencyInfo
 {
-	/* Counter incremented every time this element is hit during iteration, **if** the counter is less than the CurrentIterationIndex */
 	mutable uint64 StructsIterationHitCount = 0x0;
 	mutable uint64 ClassesIterationHitCount = 0x0;
 
-	/* List of packages required by "ThisPackage_structs.h" */
 	DependencyListType StructsDependencies;
-
-	/* List of packages required by "ThisPackage_classes.h" */
 	DependencyListType ClassesDependencies;
-
-	/* List of packages required by "ThisPackage_parameters.h" */
 	DependencyListType ParametersDependencies;
 };
 
@@ -68,10 +64,8 @@ private:
 private:
 	int32 PackageIndex;
 
-	/* Name of this Package*/
 	HashStringTableIndex Name = HashStringTableIndex::FromInt(-1);
 
-	/* Count to track how many packages with this name already exists at the point this PackageInfos' initialization */
 	uint64 CollisionCount = 0x0;
 
 	bool bHasParams;
@@ -82,10 +76,8 @@ private:
 	std::vector<int32> Functions;
 	std::vector<int32> Enums;
 
-	/* Pair<Index, bIsClass>. Forward declarations for enums, mostly for enums from packages with cyclic dependencies */
 	std::vector<std::pair<int32, bool>> EnumForwardDeclarations;
 
-	/* mutable to allow PackageManager to erase cyclic dependencies */
 	mutable DependencyInfo PackageDependencies;
 };
 
@@ -105,7 +97,6 @@ public:
 public:
 	int32 GetIndex() const;
 
-	/* Returns a pair of name and CollisionCount */
 	std::string GetName() const;
 	const StringEntry& GetNameEntry() const;
 	std::pair<std::string, uint8> GetNameCollisionPair() const;
@@ -223,13 +214,10 @@ private:
 	};
 
 private:
-	/* NameTable containing names of all Packages as well as information on name-collisions */
 	static inline HashStringTable UniquePackageNameTable;
 
-	/* Map containing infos on all Packages. Implemented due to information missing in the Unreal's reflection system (PackageSize). */
 	static inline OverrideMaptType PackageInfos;
 
-	/* Count to track how often the PackageInfos was iterated. Allows for up to 2^64 iterations of this list. */
 	static inline uint64 CurrentIterationHitCount = 0x0;
 
 	static inline bool bIsInitialized     = false;
@@ -285,7 +273,33 @@ public:
 
 	static inline PackageInfoHandle GetInfo(int32 PackageIndex)
 	{
-		return PackageInfos.at(PackageIndex);
+		auto It = PackageInfos.find(PackageIndex);
+		if (It != PackageInfos.end())
+			return It->second;
+
+		// On-demand registration for a package that was not present during Init().
+		// Some assets (e.g. AnimBlueprints) contain struct/class definitions without
+		// being reachable as Struct/Class/Function/Enum in the first pass, so they
+		// never entered PackageInfos. Without this fallback, .at() would throw
+		// std::out_of_range and abort SDK generation.
+		PackageInfo& NewInfo = PackageInfos[PackageIndex];
+		NewInfo.PackageIndex = PackageIndex;
+
+		std::string ResolvedName;
+		if (GMemory && GMemory->IsMemoryAccessOk())
+		{
+			UEObject PackageObject = ObjectArray::GetByIndex(PackageIndex);
+			if (PackageObject)
+				ResolvedName = PackageObject.GetValidName();
+		}
+
+		if (ResolvedName.empty())
+			ResolvedName = "UnknownPackage_" + std::to_string(PackageIndex);
+
+		auto [NameIdx, bInserted] = UniquePackageNameTable.FindOrAdd(ResolvedName);
+		NewInfo.Name = NameIdx;
+
+		return NewInfo;
 	}
 
 	static inline PackageInfoHandle GetInfo(const UEObject Package)
@@ -293,7 +307,7 @@ public:
 		if (!Package)
 			return {};
 
-		return PackageInfos.at(Package.GetIndex());
+		return GetInfo(Package.GetIndex());
 	}
 
 	static inline PackageInfoIterator IterateOverPackageInfos()
