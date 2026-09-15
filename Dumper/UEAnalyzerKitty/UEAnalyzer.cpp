@@ -19,13 +19,6 @@ namespace UEAnalyzerKitty
 {
 	namespace
 	{
-
-		/**
-		 * @brief Applies the caller's veto.
-		 *
-		 * Deliberately last, after every built-in check, so the veto can only remove
-		 * candidates and never introduce one.
-		 */
 		void ApplyValidator(std::vector<Candidate>& Candidates, const CandidateValidator& Validator)
 		{
 			if (!Validator)
@@ -34,47 +27,27 @@ namespace UEAnalyzerKitty
 			{ return !Validator(C.Address); }),
 			                 Candidates.end());
 		}
+	}
 
-	} // namespace
-
-	/**
-	 * @brief The analysis shared by every strategy and both lookups.
-	 *
-	 * Held behind a shared_ptr so the analyzer stays movable while the heavy
-	 * analysis headers stay out of UEAnalyzer.h.
-	 */
 	struct UEAnalyzer::Analysis
 	{
 		GlobalAccessHarvester Harvester;
 
-		/**
-		 * @brief One strategy and the anchor sites located for it.
-		 *
-		 * Held per strategy rather than per target kind: the strategy is the
-		 * target, so this list *is* the set of things the analyzer can find.
-		 */
 		struct TargetAnalysis
 		{
 			StrategyPtr Strategy;
 			StringAnchors Anchors;
-			/// Ascending, so scoring can binary-search it without sorting per candidate.
 			std::vector<uint64_t> AnchorSites;
-			/// The same sites, kept per anchor so their weights survive.
 			std::vector<StringAnchors::WeightedSites> AnchorSitesByAnchor;
 		};
 		std::vector<TargetAnalysis> Targets;
 
 		CallGraph Calls;
 
-		/// Borrowed from the caller, who must keep it alive for the analysis.
 		const IArchDecoder* Arch = nullptr;
 
-		/// Fetched once. Everything downstream borrows this rather than calling
-		/// GetUnrealModule(), which returns by value.
 		ModuleInfo Module;
 
-		/// Measured once in Analyze(): the scans behind it are not free, and nothing
-		/// about the answer changes between queries.
 		ETCharKind TChar      = ETCharKind::Unknown;
 		size_t TCharUtf16Hits = 0;
 		size_t TCharUtf32Hits = 0;
@@ -82,13 +55,6 @@ namespace UEAnalyzerKitty
 		std::unordered_map<uint64_t, uint32_t> AccessRank;
 		uint32_t RankedCount = 0;
 
-		/**
-		 * @brief Builds the scoring context for one target.
-		 *
-		 * Shared by the query path and the diagnostics so a candidate is scored the
-		 * same way whether it is being ranked or being explained; a context assembled
-		 * twice is a context that drifts.
-		 */
 		AnalysisContext MakeContext(const TargetAnalysis& Target, IMemory* Mem, const ScoringWeights& Weights) const
 		{
 			AnalysisContext Ctx;
@@ -104,12 +70,6 @@ namespace UEAnalyzerKitty
 			return Ctx;
 		}
 
-		/**
-		 * @brief Ranks writable, non-executable globals by access count.
-		 *
-		 * Restricting the ranking to plausible locations is what keeps code and
-		 * read-only data from pushing real globals down the list.
-		 */
 		void BuildRanking()
 		{
 			std::vector<std::pair<uint64_t, uint32_t>> Ranked;
@@ -166,23 +126,9 @@ namespace UEAnalyzerKitty
 		State->Module = Memory->GetUnrealModule();
 		State->Arch   = Arch;
 
-		// Each strategy brings its own proximity anchors, so locating them needs no
-		// knowledge here of what any of them is looking for. Built before either
-		// phase runs, because the literal scan below fills them.
-		//
-		// Only the requested ones are kept: every target costs its own pass over the
-		// module's literals, and a caller after one global should not pay for all of
-		// them. Constructing a strategy is free - it holds no state - so the filter
-		// asks each one its own name rather than keeping a separate table in step.
 		{
 			std::vector<StrategyPtr> Available = Targets::CreateAll();
 
-			// Out.Options_, not Options: Options was moved from at the top of this
-			// function, so its Targets vector is empty whatever the caller asked for
-			// and every target looked wanted. A caller after one global silently paid
-			// for a literal pass per target - three full sweeps of the module where
-			// one was asked for, which on a syscall-backed transport is the module
-			// pulled across twice for nothing.
 			for (StrategyPtr& S : Available)
 			{
 				if (!Out.Options_.IsTargetWanted(S->Name()))
@@ -191,39 +137,19 @@ namespace UEAnalyzerKitty
 			}
 		}
 
-		// One decode pass feeds everything downstream, including the call graph,
-		// rather than sweeping the same bytes a second time for it.
 		const auto Harvest_ = [&]
 		{ return State->Harvester.Run(Memory, Arch, Harvest, &State->Calls); };
 
-		// Finding the anchor strings needs no harvest result, only the bytes, so it
-		// is the one phase that can run beside the decode. It writes each target's
-		// own StringAnchors and the TCHAR counters, all of which the harvest never
-		// touches, and both phases only read from Memory and Module.
 		const auto ScanLiterals = [&]
 		{
 			for (Analysis::TargetAnalysis& T : State->Targets)
 				T.Anchors.Run(Memory, State->Module, T.Strategy->ProximityAnchors());
-			State->TChar = DetectTCharKind(Memory, &State->TCharUtf16Hits, &State->TCharUtf32Hits);
 		};
 
 		bool bHarvested = false;
-		// Out.Options_ for the same reason as the target filter above. ThreadMode is
-		// a scalar and so survives the move intact, but reading a moved-from object
-		// at all is what let the Targets bug sit here unnoticed.
+
 		if (Out.Options_.ThreadMode == EThreadMode::Two)
 		{
-			// The scan goes to the second thread and the harvest stays here, so a
-			// failure to spawn is the only thing that could differ - and that throws
-			// rather than silently running half the work.
-			//
-			// Both halves are written so that a throw cannot reach a thread
-			// boundary. An exception escaping the worker would call std::terminate
-			// outright, and one escaping the harvest would destroy a still-joinable
-			// thread, which terminates just the same. Since this code can be hosted
-			// inside another process, terminating takes that process down with it -
-			// so the worker captures instead of propagating, and the join is owned
-			// by a scope guard rather than by a statement that unwinding can skip.
 			std::exception_ptr ScanError;
 			{
 				std::thread Scanner([&]
@@ -240,10 +166,6 @@ namespace UEAnalyzerKitty
 				bHarvested = Harvest_();
 			}
 
-			// Rethrown only once the worker has been joined, so the captured
-			// exception reaches the caller exactly as an unthreaded run would raise
-			// it. A harvest failure unwinds first and wins, which matches the
-			// single-threaded order.
 			if (ScanError)
 				std::rethrow_exception(ScanError);
 		}
@@ -259,8 +181,8 @@ namespace UEAnalyzerKitty
 			return Out;
 		}
 
-		// Needs both phases: the sites come from the harvester, the strings from the
-		// scan, so this is the join point rather than part of either.
+		State->TChar = DetectTCharKind(Memory, &State->TCharUtf16Hits, &State->TCharUtf32Hits);
+
 		for (Analysis::TargetAnalysis& T : State->Targets)
 		{
 			const std::unordered_set<uint64_t> Sites = T.Anchors.CollectAnchorSites(State->Harvester);
@@ -277,7 +199,6 @@ namespace UEAnalyzerKitty
 
 	namespace
 	{
-		/// The registered target answering to TargetName, or null when none does.
 		const UEAnalyzer::Analysis::TargetAnalysis* FindTarget(const UEAnalyzer::Analysis& State, const char* TargetName)
 		{
 			if (!TargetName)
@@ -287,7 +208,7 @@ namespace UEAnalyzerKitty
 					return &Entry;
 			return nullptr;
 		}
-	} // namespace
+	}
 
 	TargetAssessment UEAnalyzer::AssessAddress(const char* TargetName, uint64_t Address) const
 	{
@@ -308,8 +229,6 @@ namespace UEAnalyzerKitty
 		}
 		Out.Target = Found->Strategy->Name();
 
-		// Ordered from the earliest thing that can go wrong to the latest, so Reason
-		// names the first gate that actually stopped it.
 		const MemRegionInfo* Seg = State_->Module.FindAddressRegion(static_cast<uintptr_t>(Address));
 		if (!Seg)
 		{
@@ -338,8 +257,6 @@ namespace UEAnalyzerKitty
 		}
 		Out.Layout = MakeLayoutDescription(Out.Evidence, Address);
 
-		// Verified. Where it stands is read off the same query path a caller would
-		// use, so Rank/CandidateCount/bAnswer always agree with Find()'s own answer.
 		const LocateResult R = Run(Out.Target, {});
 		Out.CandidateCount   = R.Candidates.size();
 		for (size_t i = 0; i < R.Candidates.size(); ++i)
@@ -358,9 +275,6 @@ namespace UEAnalyzerKitty
 			return Out;
 		}
 
-		// Verified but not in the returned list: that hides two failures that need
-		// opposite fixes - a filter dropped the address, or it scored and ranked too
-		// low. Re-run the scorer untrimmed to say which, and where.
 		AnalysisContext Ctx                 = State_->MakeContext(*Found, Memory_, Options_.Weights);
 		Ctx.MaxScored                       = 0;
 		const std::vector<Candidate> Scored = Scoring::FuseCandidates(Found->Strategy->Score(Ctx), Options_.Weights);
@@ -414,9 +328,6 @@ namespace UEAnalyzerKitty
 			Out.Access.Rank = It == State_->AccessRank.end() ? 0u : It->second;
 		}
 
-		// Every registered target is asked, not only the one a caller had in mind: a
-		// name table that also verifies as an object array explains a cross-target
-		// mix-up that a single verdict would not.
 		Out.Targets.reserve(State_->Targets.size());
 		for (const Analysis::TargetAnalysis& T : State_->Targets)
 			Out.Targets.push_back(AssessAddress(T.Strategy->Name(), Address));
@@ -460,7 +371,6 @@ namespace UEAnalyzerKitty
 		return Out;
 	}
 
-
 	ETCharKind UEAnalyzer::GetTCharKind() const
 	{
 		return State_ ? State_->TChar : ETCharKind::Unknown;
@@ -493,9 +403,6 @@ namespace UEAnalyzerKitty
 
 		Analysis* State = State_.get();
 
-		// The strategies are asked which of them answers to this name, so a target is
-		// identified by the one string it already publishes rather than by its
-		// position in a list.
 		const Analysis::TargetAnalysis* Found = nullptr;
 		for (const Analysis::TargetAnalysis& Entry : State->Targets)
 		{
@@ -513,26 +420,16 @@ namespace UEAnalyzerKitty
 		Result.Target                     = Strategy.Name();
 
 		AnalysisContext Ctx = State->MakeContext(T, Memory_, Options_.Weights);
-		// A caller asking for more candidates than a strategy keeps by default gets
-		// them; the trim is a cost bound, not a limit on the answer.
 		Ctx.MaxScored = std::max(Options_.MaxCandidates, kMaxScoredCandidates);
 
 		const bool bWantAnchored = !Options_.Method || *Options_.Method == EFindMethod::Anchored;
 		const bool bWantLeads    = !Options_.Method || *Options_.Method == EFindMethod::Statistical;
 
-		// Tier 1: anchored resolution. A verified answer here is the answer; the
-		// statistical path below exists only to offer leads when nothing verifies,
-		// and its output is never presented as a result.
 		if (State->Arch && bWantAnchored)
 		{
 			AnchoredResolution Anchored(Memory_, State->Module, State->Harvester, *State->Arch, &State->Calls);
 			std::vector<Candidate> Verified = Anchored.Resolve(Strategy, Options_.Weights);
 
-			// Structure verification says the shape is right; it does not say the
-			// evidence is sufficient. A single instance of the weakest anchor can
-			// clear verification and still land on the wrong global, with nothing
-			// corroborating it. Hold the anchored tier to the same confidence gate as
-			// everything else and let those fall through to labelled leads.
 			Verified.erase(std::remove_if(Verified.begin(), Verified.end(), [&](const Candidate& C)
 			{ return C.Confidence < Options_.Weights.MinConfidence; }),
 			               Verified.end());
@@ -542,9 +439,6 @@ namespace UEAnalyzerKitty
 			if (!Verified.empty())
 			{
 				Result.Candidates = std::move(Verified);
-				// A strategy that does not claim verification still contributes its
-				// ranked candidates - they are the best leads available - but none of
-				// them is presented as the answer.
 				Result.bVerified  = Strategy.ClaimsVerification();
 				Result.FindMethod = EFindMethod::Anchored;
 				if (Result.Candidates.size() > Options_.MaxCandidates)
@@ -556,12 +450,6 @@ namespace UEAnalyzerKitty
 		if (!bWantLeads)
 			return Result;
 
-		// Tier 2: statistical leads. Nothing here is an answer, only a ranked list a
-		// human can work through, which is why the result is labelled unverified.
-		//
-		// One strategy per target, so there is nothing to fuse across and no prior
-		// to apply: an engine-version hint would be a caller's claim this tool
-		// cannot check.
 		Result.Candidates = Scoring::FuseCandidates(Strategy.Score(Ctx), Options_.Weights);
 		ApplyValidator(Result.Candidates, Validator);
 		Result.bVerified  = false;
@@ -572,4 +460,4 @@ namespace UEAnalyzerKitty
 		return Result;
 	}
 
-} // namespace UEAnalyzerKitty
+}
