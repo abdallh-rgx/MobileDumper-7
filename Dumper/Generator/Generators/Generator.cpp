@@ -275,7 +275,7 @@ bool Generator::InitNames(std::string& OutErrorString)
 
 	NameArray::SetDecryptNameEntryFn([](uintptr_t& NameEntry)
 {
-	GProfile->DecryptNameEntry(GNames, NameEntry);
+	GProfile->DecryptNameEntry(GNames, GLayouts.NamesLayout, NameEntry);
 });
 
 	auto TryGNamesAt = [](uintptr_t NamesAddress, const char* Interpretation) -> bool
