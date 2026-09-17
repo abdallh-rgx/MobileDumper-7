@@ -69,11 +69,49 @@ bool Generator::InitUnrealModule(std::string& OutErrorString)
 
 bool Generator::InitUEAnalyzerKitty(std::string& OutErrorString)
 {
-	UEAnalyzerKitty::AnalyzerOptions Options;
-	Options.ThreadMode = UEAnalyzerKitty::EThreadMode::Two;
-	Options.Targets    = {UEAnalyzerKitty::Targets::Names, UEAnalyzerKitty::Targets::GUObjectArray, UEAnalyzerKitty::Targets::ObjObjects};
+	GLogger.FmtWrite(ELogLevel::Info, "InitUEAnalyzerKitty: entry, GMemory={} GArchDecoder={}\n",
+		GMemory ? "ok" : "null",
+		GArchDecoder ? "ok" : "null");
 
-	Analyzer = UEAnalyzerKitty::UEAnalyzer::Analyze(GMemory.get(), GArchDecoder.get(), Options);
+	if (!GMemory || !GArchDecoder)
+	{
+		OutErrorString = "InitUEAnalyzerKitty: GMemory or GArchDecoder is null!";
+		GLogger.FmtWrite(ELogLevel::Error, "{}\n", OutErrorString);
+		return false;
+	}
+
+	GLogger.FmtWrite(ELogLevel::Info, "InitUEAnalyzerKitty: building options...\n");
+
+	UEAnalyzerKitty::AnalyzerOptions Options;
+	Options.ThreadMode = UEAnalyzerKitty::EThreadMode::Single;
+	Options.Targets    = {
+	    UEAnalyzerKitty::Targets::Names,
+	    UEAnalyzerKitty::Targets::GUObjectArray,
+	    UEAnalyzerKitty::Targets::ObjObjects,
+	};
+
+	GLogger.FmtWrite(ELogLevel::Info, "InitUEAnalyzerKitty: starting Analyze (this may take 30-90 seconds)...\n");
+
+	try
+	{
+		Analyzer = UEAnalyzerKitty::UEAnalyzer::Analyze(GMemory.get(), GArchDecoder.get(), Options);
+	}
+	catch (const std::exception& E)
+	{
+		OutErrorString = std::string("UEAnalyzerKitty threw an exception: ") + E.what();
+		GLogger.FmtWrite(ELogLevel::Error, "{}\n", OutErrorString);
+		return false;
+	}
+	catch (...)
+	{
+		OutErrorString = "UEAnalyzerKitty threw an unknown exception";
+		GLogger.FmtWrite(ELogLevel::Error, "{}\n", OutErrorString);
+		return false;
+	}
+
+	GLogger.FmtWrite(ELogLevel::Info, "InitUEAnalyzerKitty: Analyze returned, IsValid={}\n",
+		Analyzer.IsValid() ? "true" : "false");
+
 	if (!Analyzer.IsValid())
 	{
 		OutErrorString = Analyzer.GetError();
@@ -83,7 +121,8 @@ bool Generator::InitUEAnalyzerKitty(std::string& OutErrorString)
 
 	InternalSettings::bUseChar16String = Analyzer.GetTCharKind() != UEAnalyzerKitty::ETCharKind::Char32;
 
-	GLogger.FmtWrite(ELogLevel::Info, "Game build is likely using UTF{} FName strings.\n", InternalSettings::bUseChar16String ? "16" : "32");
+	GLogger.FmtWrite(ELogLevel::Info, "Game build is likely using UTF{} FName strings.\n",
+		InternalSettings::bUseChar16String ? "16" : "32");
 
 	return true;
 }
@@ -269,14 +308,14 @@ bool Generator::InitNames(std::string& OutErrorString)
 	});
 
 	NameArray::SetDecryptNameChunkFn([](uintptr_t& ChunkAddr)
-{
-	GProfile->DecryptNameChunk(GNames, GLayouts.NamesLayout, ChunkAddr);
-});
+	{
+		GProfile->DecryptNameChunk(GNames, GLayouts.NamesLayout, ChunkAddr);
+	});
 
 	NameArray::SetDecryptNameEntryFn([](uintptr_t& NameEntry)
-{
-	GProfile->DecryptNameEntry(GNames, GLayouts.NamesLayout, NameEntry);
-});
+	{
+		GProfile->DecryptNameEntry(GNames, GLayouts.NamesLayout, NameEntry);
+	});
 
 	auto TryGNamesAt = [](uintptr_t NamesAddress, const char* Interpretation) -> bool
 	{
@@ -902,7 +941,7 @@ static std::string EscapeCString(const std::string& s)
 	return out;
 }
 
-static std::wstring Utf8ToWString(const std::string& s)
+static std::wstring Utf8ToWStringLocal(const std::string& s)
 {
 	std::wstring out;
 	out.reserve(s.size());
@@ -925,7 +964,7 @@ static std::wstring Utf8ToWString(const std::string& s)
 	return out;
 }
 
-static std::string WStringToUtf8(const std::wstring& s)
+static std::string WStringToUtf8Local(const std::wstring& s)
 {
 	std::string out;
 	out.reserve(s.size());
@@ -957,6 +996,8 @@ static std::string WStringToUtf8(const std::wstring& s)
 
 void Generator::GenerateNameIndexHeader()
 {
+	GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: starting\n");
+
 	struct Entry
 	{
 		std::string Utf8Name;
@@ -989,11 +1030,14 @@ void Generator::GenerateNameIndexHeader()
 
 		Entry E;
 		E.Utf8Name = Name;
-		E.WideName = Utf8ToWString(Name);
+		E.WideName = Utf8ToWStringLocal(Name);
 		E.Index = i;
 		if (!E.WideName.empty())
 			Entries.push_back(std::move(E));
 	}
+
+	GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: collected {} entries, lastValid={}\n",
+		(int)Entries.size(), LastValid);
 
 	std::sort(Entries.begin(), Entries.end(), [](const Entry& A, const Entry& B)
 	{
@@ -1003,6 +1047,9 @@ void Generator::GenerateNameIndexHeader()
 	Entries.erase(std::unique(Entries.begin(), Entries.end(),
 		[](const Entry& A, const Entry& B) { return A.WideName == B.WideName; }),
 		Entries.end());
+
+	GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: {} unique names after dedup\n",
+		(int)Entries.size());
 
 	const std::string Path = (DumperFolder / "NameIndices.h").string();
 	std::ofstream Out(Path, std::ios::binary);
@@ -1046,7 +1093,7 @@ void Generator::GenerateNameIndexHeader()
 	Out << "inline const Entry kTable[] = {\n";
 	for (const Entry& E : Entries)
 	{
-		std::string WideUtf8 = WStringToUtf8(E.WideName);
+		std::string WideUtf8 = WStringToUtf8Local(E.WideName);
 		Out << "    {L\"";
 		Out << EscapeCString(WideUtf8);
 		Out << "\", ";
