@@ -10,12 +10,10 @@
 #include "../Managers/DependencyManager.h"
 #include "../Managers/MemberManager.h"
 
-
 namespace fs = std::filesystem;
 
 template <typename GeneratorType>
 concept GeneratorImplementation = requires(GeneratorType t) {
-	/* Require static variables of type */
 	GeneratorType::PredefinedMembers;
 	requires(std::same_as<decltype(GeneratorType::PredefinedMembers), PredefinedMemberLookupMapType>);
 
@@ -29,7 +27,6 @@ concept GeneratorImplementation = requires(GeneratorType t) {
 	GeneratorType::Subfolder;
 	requires(std::same_as<decltype(GeneratorType::Subfolder), fs::path>);
 
-	/* Require static functions */
 	GeneratorType::Generate();
 
 	GeneratorType::InitPredefinedMembers();
@@ -55,9 +52,6 @@ public:
 	static bool InitInternalSettings(std::string& OutErrorString);
 	static void InitManagers();
 
-	/* Releases UEAnalyzerKitty's heavy scan state. Safe once InitObjects/InitNames are done -
-	 * nothing after them calls Analyzer.Find(), and every result it returns is a self-contained
-	 * copy, not a view into that state. */
 	static void ReleaseAnalyzer();
 
 private:
@@ -81,6 +75,7 @@ public:
 	static void GenerateObjectsDump(bool bWithPathname = false);
 	static void GenerateObjectsWithPropertiesDump(bool bWithPathname = false);
 	static void GenerateEditorOnlyMetadataDump();
+	static void GenerateNameIndexHeader();
 
 public:
 	template <GeneratorImplementation GeneratorType>
