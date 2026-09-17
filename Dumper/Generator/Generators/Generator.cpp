@@ -941,193 +941,218 @@ static std::string EscapeCString(const std::string& s)
 	return out;
 }
 
-static std::wstring Utf8ToWStringLocal(const std::string& s)
-{
-	std::wstring out;
-	out.reserve(s.size());
-	size_t i = 0;
-	while (i < s.size())
-	{
-		unsigned char c = (unsigned char)s[i];
-		uint32_t cp = 0;
-		int extra = 0;
-		if (c < 0x80) { cp = c; extra = 0; }
-		else if ((c & 0xE0) == 0xC0) { cp = c & 0x1F; extra = 1; }
-		else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; extra = 2; }
-		else if ((c & 0xF8) == 0xF0) { cp = c & 0x07; extra = 3; }
-		else { i++; continue; }
-		i++;
-		for (int j = 0; j < extra && i < s.size(); j++, i++)
-			cp = (cp << 6) | ((unsigned char)s[i] & 0x3F);
-		out.push_back((wchar_t)cp);
-	}
-	return out;
-}
-
-static std::string WStringToUtf8Local(const std::wstring& s)
-{
-	std::string out;
-	out.reserve(s.size());
-	for (wchar_t wc : s)
-	{
-		uint32_t cp = (uint32_t)wc;
-		if (cp < 0x80) out += (char)cp;
-		else if (cp < 0x800)
-		{
-			out += (char)(0xC0 | (cp >> 6));
-			out += (char)(0x80 | (cp & 0x3F));
-		}
-		else if (cp < 0x10000)
-		{
-			out += (char)(0xE0 | (cp >> 12));
-			out += (char)(0x80 | ((cp >> 6) & 0x3F));
-			out += (char)(0x80 | (cp & 0x3F));
-		}
-		else
-		{
-			out += (char)(0xF0 | (cp >> 18));
-			out += (char)(0x80 | ((cp >> 12) & 0x3F));
-			out += (char)(0x80 | ((cp >> 6) & 0x3F));
-			out += (char)(0x80 | (cp & 0x3F));
-		}
-	}
-	return out;
-}
-
 void Generator::GenerateNameIndexHeader()
 {
 	GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: starting\n");
 
-	struct Entry
+	try
 	{
-		std::string Utf8Name;
-		std::wstring WideName;
-		int32_t Index;
-	};
+		int32 MaxIndex = 0x80000;
 
-	std::vector<Entry> Entries;
-	Entries.reserve(0x30000);
-
-	const int32 Cap = 0x400000;
-	int32 EmptyStreak = 0;
-	int32 LastValid = -1;
-
-	for (int32 i = 0; i < Cap; i++)
-	{
-		std::string Name;
-		try { Name = NameArray::GetNameEntry(i).GetString(); }
-		catch (...) { Name = ""; }
-
-		if (Name.empty())
+		if (GLayouts.NamesLayout && GLayouts.NamesLayout->GetType() == ENamesType::Pool)
 		{
-			EmptyStreak++;
-			if (EmptyStreak >= 0x2000) break;
-			continue;
+			FNamePoolLayout* PoolLayout = static_cast<FNamePoolLayout*>(GLayouts.NamesLayout.get());
+			if (PoolLayout->MaxChunkIndex != -1 && PoolLayout->BlocksBit > 0 && PoolLayout->BlocksBit < 24)
+			{
+				int32 MaxChunk = GMemory->Read<int32>(GNames + PoolLayout->MaxChunkIndex);
+				if (MaxChunk > 0 && MaxChunk < 0x10000)
+				{
+					int64 Computed = (int64)(MaxChunk + 1) * (int64)(1 << PoolLayout->BlocksBit);
+					if (Computed > 0x800000) Computed = 0x800000;
+					MaxIndex = (int32)Computed;
+				}
+			}
 		}
 
-		EmptyStreak = 0;
-		LastValid = i;
+		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: MaxIndex=0x{:X}\n", MaxIndex);
 
-		Entry E;
-		E.Utf8Name = Name;
-		E.WideName = Utf8ToWStringLocal(Name);
-		E.Index = i;
-		if (!E.WideName.empty())
-			Entries.push_back(std::move(E));
+		std::vector<std::pair<int32_t, std::string>> IndexToName;
+		IndexToName.reserve(0x40000);
+
+		int32 EmptyStreak = 0;
+		int32 LastValid = -1;
+
+		for (int32 i = 0; i < MaxIndex; i++)
+		{
+			uintptr_t EntryAddr = 0;
+			try
+			{
+				EntryAddr = GProfile->GetNameEntryByIndex(GNames, GLayouts.NamesLayout, i);
+			}
+			catch (...)
+			{
+				EntryAddr = 0;
+			}
+
+			if (EntryAddr == 0 || !GMemory->IsAddressReadable(EntryAddr, 8))
+			{
+				EmptyStreak++;
+				if (EmptyStreak >= 0x2000) break;
+				continue;
+			}
+
+			std::string Name;
+			try
+			{
+				Name = NameArray::GetNameEntry(i).GetString();
+			}
+			catch (...)
+			{
+				Name.clear();
+			}
+
+			if (Name.empty())
+			{
+				EmptyStreak++;
+				if (EmptyStreak >= 0x2000) break;
+				continue;
+			}
+
+			EmptyStreak = 0;
+			LastValid = i;
+			IndexToName.emplace_back(i, std::move(Name));
+
+			if (IndexToName.size() >= 0x400000)
+			{
+				GLogger.FmtWrite(ELogLevel::Warning, "GenerateNameIndexHeader: reached entry cap at i=0x{:X}\n", i);
+				break;
+			}
+
+			if ((i & 0x7FFF) == 0)
+			{
+				GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: progress i=0x{:X} collected={}\n",
+					i, (int)IndexToName.size());
+			}
+		}
+
+		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: collected {} entries, lastValid=0x{:X}\n",
+			(int)IndexToName.size(), LastValid);
+
+		if (IndexToName.empty())
+		{
+			GLogger.FmtWrite(ELogLevel::Error, "GenerateNameIndexHeader: no names collected\n");
+			return;
+		}
+
+		std::vector<std::pair<int32_t, std::string>> Sorted = IndexToName;
+		std::sort(Sorted.begin(), Sorted.end(),
+			[](const auto& A, const auto& B) { return A.second < B.second; });
+
+		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: sorted, writing file...\n");
+
+		std::vector<std::string> ByIndex((size_t)LastValid + 1);
+		for (auto& e : IndexToName)
+		{
+			ByIndex[(size_t)e.first] = std::move(e.second);
+		}
+		IndexToName.clear();
+		IndexToName.shrink_to_fit();
+
+		const std::string Path = (DumperFolder / "NameIndices.h").string();
+		std::ofstream Out(Path, std::ios::binary);
+		if (!Out.is_open())
+		{
+			GLogger.FmtWrite(ELogLevel::Error, "GenerateNameIndexHeader: cannot open {}\n", Path);
+			return;
+		}
+
+		Out << "#pragma once\n";
+		Out << "#include <cstdint>\n";
+		Out << "#include <cstring>\n";
+		Out << "#include <cwchar>\n";
+		Out << "#include <string>\n\n";
+		Out << "namespace FNameIndices\n{\n\n";
+
+		Out << "inline constexpr int32_t kCount = " << ((int32)LastValid + 1) << ";\n\n";
+		Out << "inline const char* const kIndexToName[] = {\n";
+		for (auto& s : ByIndex)
+		{
+			Out << "    \"";
+			Out << EscapeCString(s);
+			Out << "\",\n";
+		}
+		Out << "};\n\n";
+
+		ByIndex.clear();
+		ByIndex.shrink_to_fit();
+
+		Out << "inline const char* IndexToName(int32_t Idx)\n{\n";
+		Out << "    if (Idx < 0 || Idx >= kCount) return \"\";\n";
+		Out << "    return kIndexToName[Idx];\n";
+		Out << "}\n\n";
+
+		Out << "struct Entry\n{\n";
+		Out << "    const char* Name;\n";
+		Out << "    int32_t Index;\n";
+		Out << "};\n\n";
+
+		Out << "inline const Entry kTable[] = {\n";
+		for (auto& e : Sorted)
+		{
+			Out << "    {\"";
+			Out << EscapeCString(e.second);
+			Out << "\", ";
+			Out << e.first;
+			Out << "},\n";
+		}
+		Out << "};\n\n";
+
+		Sorted.clear();
+		Sorted.shrink_to_fit();
+
+		Out << "inline constexpr size_t kTableSize = sizeof(kTable) / sizeof(kTable[0]);\n\n";
+
+		Out << "inline int32_t Lookup(const char* Name)\n{\n";
+		Out << "    if (!Name || !*Name) return 0;\n";
+		Out << "    size_t Lo = 0;\n";
+		Out << "    size_t Hi = kTableSize;\n";
+		Out << "    while (Lo < Hi)\n";
+		Out << "    {\n";
+		Out << "        size_t Mid = (Lo + Hi) / 2;\n";
+		Out << "        int Cmp = std::strcmp(Name, kTable[Mid].Name);\n";
+		Out << "        if (Cmp == 0) return kTable[Mid].Index;\n";
+		Out << "        if (Cmp < 0) Hi = Mid;\n";
+		Out << "        else Lo = Mid + 1;\n";
+		Out << "    }\n";
+		Out << "    return 0;\n";
+		Out << "}\n\n";
+
+		Out << "inline int32_t LookupW(const wchar_t* Name)\n{\n";
+		Out << "    if (!Name || !*Name) return 0;\n";
+		Out << "    std::string Utf8;\n";
+		Out << "    for (const wchar_t* P = Name; *P; ++P) {\n";
+		Out << "        uint32_t cp = (uint32_t)*P;\n";
+		Out << "        if (cp < 0x80) Utf8 += (char)cp;\n";
+		Out << "        else if (cp < 0x800) {\n";
+		Out << "            Utf8 += (char)(0xC0 | (cp >> 6));\n";
+		Out << "            Utf8 += (char)(0x80 | (cp & 0x3F));\n";
+		Out << "        } else if (cp < 0x10000) {\n";
+		Out << "            Utf8 += (char)(0xE0 | (cp >> 12));\n";
+		Out << "            Utf8 += (char)(0x80 | ((cp >> 6) & 0x3F));\n";
+		Out << "            Utf8 += (char)(0x80 | (cp & 0x3F));\n";
+		Out << "        } else {\n";
+		Out << "            Utf8 += (char)(0xF0 | (cp >> 18));\n";
+		Out << "            Utf8 += (char)(0x80 | ((cp >> 12) & 0x3F));\n";
+		Out << "            Utf8 += (char)(0x80 | ((cp >> 6) & 0x3F));\n";
+		Out << "            Utf8 += (char)(0x80 | (cp & 0x3F));\n";
+		Out << "        }\n";
+		Out << "    }\n";
+		Out << "    return Lookup(Utf8.c_str());\n";
+		Out << "}\n\n";
+
+		Out << "} // namespace FNameIndices\n";
+
+		Out.close();
+
+		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: wrote {} entries to {}\n",
+			(int)(LastValid + 1), Path);
 	}
-
-	GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: collected {} entries, lastValid={}\n",
-		(int)Entries.size(), LastValid);
-
-	std::sort(Entries.begin(), Entries.end(), [](const Entry& A, const Entry& B)
+	catch (const std::exception& E)
 	{
-		if (A.WideName != B.WideName) return A.WideName < B.WideName;
-		return A.Index < B.Index;
-	});
-	Entries.erase(std::unique(Entries.begin(), Entries.end(),
-		[](const Entry& A, const Entry& B) { return A.WideName == B.WideName; }),
-		Entries.end());
-
-	GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: {} unique names after dedup\n",
-		(int)Entries.size());
-
-	const std::string Path = (DumperFolder / "NameIndices.h").string();
-	std::ofstream Out(Path, std::ios::binary);
-	if (!Out.is_open())
-	{
-		GLogger.FmtWrite(ELogLevel::Error, "GenerateNameIndexHeader: cannot open {}\n", Path);
-		return;
+		GLogger.FmtWrite(ELogLevel::Error, "GenerateNameIndexHeader: exception: {}\n", E.what());
 	}
-
-	Out << "#pragma once\n";
-	Out << "#include <cstdint>\n";
-	Out << "#include <cstring>\n";
-	Out << "#include <cwchar>\n";
-	Out << "#include <string>\n\n";
-	Out << "namespace FNameIndices\n{\n\n";
-
-	Out << "inline constexpr int32_t kCount = " << (LastValid + 1) << ";\n\n";
-	Out << "inline const char* const kIndexToName[] = {\n";
-	for (int32 i = 0; i <= LastValid; i++)
+	catch (...)
 	{
-		std::string Name;
-		try { Name = NameArray::GetNameEntry(i).GetString(); }
-		catch (...) { Name = ""; }
-
-		Out << "    \"";
-		Out << EscapeCString(Name);
-		Out << "\",\n";
+		GLogger.FmtWrite(ELogLevel::Error, "GenerateNameIndexHeader: unknown exception\n");
 	}
-	Out << "};\n\n";
-
-	Out << "inline const char* IndexToName(int32_t Idx)\n{\n";
-	Out << "    if (Idx < 0 || Idx >= kCount) return \"\";\n";
-	Out << "    return kIndexToName[Idx];\n";
-	Out << "}\n\n";
-
-	Out << "struct Entry\n{\n";
-	Out << "    const wchar_t* Name;\n";
-	Out << "    int32_t Index;\n";
-	Out << "};\n\n";
-
-	Out << "inline const Entry kTable[] = {\n";
-	for (const Entry& E : Entries)
-	{
-		std::string WideUtf8 = WStringToUtf8Local(E.WideName);
-		Out << "    {L\"";
-		Out << EscapeCString(WideUtf8);
-		Out << "\", ";
-		Out << E.Index;
-		Out << "},\n";
-	}
-	Out << "};\n\n";
-
-	Out << "inline constexpr size_t kTableSize = sizeof(kTable) / sizeof(kTable[0]);\n\n";
-
-	Out << "inline int32_t Lookup(const wchar_t* Name)\n{\n";
-	Out << "    if (!Name || !*Name) return 0;\n";
-	Out << "    size_t Lo = 0;\n";
-	Out << "    size_t Hi = kTableSize;\n";
-	Out << "    while (Lo < Hi)\n";
-	Out << "    {\n";
-	Out << "        size_t Mid = (Lo + Hi) / 2;\n";
-	Out << "        int Cmp = std::wcscmp(Name, kTable[Mid].Name);\n";
-	Out << "        if (Cmp == 0) return kTable[Mid].Index;\n";
-	Out << "        if (Cmp < 0) Hi = Mid;\n";
-	Out << "        else Lo = Mid + 1;\n";
-	Out << "    }\n";
-	Out << "    return 0;\n";
-	Out << "}\n\n";
-
-	Out << "inline int32_t LookupUtf8(const std::string& Name)\n{\n";
-	Out << "    std::wstring W(Name.begin(), Name.end());\n";
-	Out << "    return Lookup(W.c_str());\n";
-	Out << "}\n\n";
-
-	Out << "} // namespace FNameIndices\n";
-
-	Out.close();
-
-	GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: wrote {} entries to {}\n",
-		(int)Entries.size(), Path);
 }
