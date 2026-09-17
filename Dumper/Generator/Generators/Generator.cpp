@@ -978,80 +978,78 @@ void Generator::GenerateNameIndexHeader()
 
 		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 3-objects done, {} unique\n", (int)NameToIdx.size());
 
+		constexpr int32 PoolScanLimit = 3000;
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 4-pool scan 0..{}\n", PoolScanLimit);
+
+		int32 PoolAdded   = 0;
+		int32 PoolSkipped = 0;
+		int32 EmptyStreak = 0;
+
+		for (int32 i = 0; i < PoolScanLimit; i++)
 		{
-			int32 PoolScanLimit = 5000;
-
-			if (GLayouts.NamesLayout && GLayouts.NamesLayout->GetType() == ENamesType::Pool)
+			uintptr_t EntryAddr = 0;
+			try
 			{
-				FNamePoolLayout* L = static_cast<FNamePoolLayout*>(GLayouts.NamesLayout.get());
+				EntryAddr = GProfile->GetNameEntryByIndex(GNames, GLayouts.NamesLayout, i);
+			}
+			catch (...) { EntryAddr = 0; }
 
-				if (L->MaxChunkIndex != -1 && L->BlocksBit > 0 && L->BlocksBit < 24)
-				{
-					int32 MaxChunk = GMemory->Read<int32>(GNames + L->MaxChunkIndex);
-					int32 Cursor = L->ByteCursor != -1 ? GMemory->Read<int32>(GNames + L->ByteCursor) : 0;
-					int32 Stride = L->FNameEntry.Stride > 0 ? L->FNameEntry.Stride : 4;
-
-					if (MaxChunk >= 0 && MaxChunk < 0x10000)
-					{
-						int64 BytesInLastChunk = Cursor > 0 ? Cursor : 0;
-						int64 Total = (int64)MaxChunk * (int64)(1 << L->BlocksBit) + BytesInLastChunk / Stride;
-						if (Total > 0 && Total < 200000)
-							PoolScanLimit = (int32)Total;
-					}
-				}
+			if (EntryAddr == 0)
+			{
+				EmptyStreak++;
+				if (EmptyStreak > 500) break;
+				continue;
 			}
 
-			GLogger.FmtWrite(ELogLevel::Info, "GNIH: 4-pool scan 0..{}\n", PoolScanLimit);
-
-			int32 PoolAdded = 0;
-			int32 EmptyStreak = 0;
-			for (int32 i = 0; i < PoolScanLimit; i++)
+			if (!GMemory->IsAddressReadable(EntryAddr, 8))
 			{
-				uintptr_t EntryAddr = 0;
-				try
-				{
-					EntryAddr = GProfile->GetNameEntryByIndex(GNames, GLayouts.NamesLayout, i);
-				}
-				catch (...) { EntryAddr = 0; }
-
-				if (EntryAddr == 0)
-				{
-					EmptyStreak++;
-					if (EmptyStreak > 5000) break;
-					continue;
-				}
-
-				std::string NameStr;
-				try
-				{
-					NameStr = NameArray::GetNameEntry(i).GetString();
-				}
-				catch (...) { NameStr.clear(); }
-
-				if (NameStr.empty() || NameStr.size() > 200)
-				{
-					EmptyStreak++;
-					if (EmptyStreak > 5000) break;
-					continue;
-				}
-
-				EmptyStreak = 0;
-
-				auto it = NameToIdx.find(NameStr);
-				if (it == NameToIdx.end())
-				{
-					NameToIdx.emplace(std::move(NameStr), i);
-					PoolAdded++;
-				}
-				else if (i < it->second)
-				{
-					it->second = i;
-				}
+				EmptyStreak++;
+				if (EmptyStreak > 500) break;
+				continue;
 			}
 
-			GLogger.FmtWrite(ELogLevel::Info, "GNIH: 5-pool done, +{} new\n", PoolAdded);
-			GLogger.FmtWrite(ELogLevel::Info, "GNIH: 6-total {}\n", (int)NameToIdx.size());
+			const uint16 Hdr = GMemory->Read<uint16>(EntryAddr);
+			const int32  Len = static_cast<int32>(Hdr >> 6);
+
+			if (Len == 0 || Len > 200)
+			{
+				PoolSkipped++;
+				EmptyStreak++;
+				if (EmptyStreak > 500) break;
+				continue;
+			}
+
+			std::string NameStr;
+			try
+			{
+				NameStr = NameArray::GetNameEntry(i).GetString();
+			}
+			catch (...) { NameStr.clear(); }
+
+			if (NameStr.empty() || NameStr.size() > 200)
+			{
+				PoolSkipped++;
+				EmptyStreak++;
+				if (EmptyStreak > 500) break;
+				continue;
+			}
+
+			EmptyStreak = 0;
+
+			auto it = NameToIdx.find(NameStr);
+			if (it == NameToIdx.end())
+			{
+				NameToIdx.emplace(std::move(NameStr), i);
+				PoolAdded++;
+			}
+			else if (i < it->second)
+			{
+				it->second = i;
+			}
 		}
+
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 5-pool done, +{} new, {} skipped\n", PoolAdded, PoolSkipped);
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 6-total {}\n", (int)NameToIdx.size());
 
 		std::vector<std::pair<int32_t, std::string>> Data;
 		Data.reserve(NameToIdx.size());
