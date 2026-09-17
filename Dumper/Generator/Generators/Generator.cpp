@@ -268,15 +268,15 @@ bool Generator::InitNames(std::string& OutErrorString)
 		GProfile->DecryptUTF32(Data, Len);
 	});
 
-	NameArray::SetDecryptNameChunkFn([](int32 ChunkIdx, uintptr_t& ChunkAddr)
-	{
-		GProfile->DecryptNameChunk(GNames, ChunkIdx, ChunkAddr);
-	});
+	NameArray::SetDecryptNameChunkFn([](uintptr_t& ChunkAddr)
+{
+	GProfile->DecryptNameChunk(GNames, GLayouts.NamesLayout, ChunkAddr);
+});
 
 	NameArray::SetDecryptNameEntryFn([](uintptr_t& NameEntry)
-	{
-		GProfile->DecryptNameEntry(GNames, NameEntry);
-	});
+{
+	GProfile->DecryptNameEntry(GNames, NameEntry);
+});
 
 	auto TryGNamesAt = [](uintptr_t NamesAddress, const char* Interpretation) -> bool
 	{
