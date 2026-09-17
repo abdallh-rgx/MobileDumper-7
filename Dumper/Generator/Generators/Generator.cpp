@@ -91,7 +91,7 @@ bool Generator::InitUEAnalyzerKitty(std::string& OutErrorString)
 	    UEAnalyzerKitty::Targets::ObjObjects,
 	};
 
-	GLogger.FmtWrite(ELogLevel::Info, "InitUEAnalyzerKitty: starting Analyze (this may take 30-90 seconds)...\n");
+	GLogger.FmtWrite(ELogLevel::Info, "InitUEAnalyzerKitty: starting Analyze...\n");
 
 	try
 	{
@@ -219,7 +219,6 @@ bool Generator::InitObjects(std::string& OutErrorString)
 	if (GMemory->IsAddressReadable(GObjects))
 	{
 		GLogger.FmtWrite(ELogLevel::Info, "InitObjects: IProfile::GetGObjects() returned valid address (0x{:X})\n", GObjects);
-
 		bSuccess = InitGObjectsVars(GObjects, "User Profile", 1.00f);
 	}
 	else
@@ -402,7 +401,6 @@ bool Generator::InitNames(std::string& OutErrorString)
 	if (GMemory->IsAddressReadable(GNames))
 	{
 		GLogger.FmtWrite(ELogLevel::Info, "InitNames: IProfile::GetGNames() returned valid address (0x{:X})\n", GNames);
-
 		bSuccess = InitGNamesVars(GNames, "User Profile", 1.00f);
 	}
 	else
@@ -944,15 +942,15 @@ static std::string EscapeCString(const std::string& s)
 
 void Generator::GenerateNameIndexHeader()
 {
-	GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: starting\n");
+	GLogger.FmtWrite(ELogLevel::Info, "GNIH: 1-start\n");
 
 	try
 	{
 		std::unordered_map<int32_t, std::string> NameByIndex;
-		NameByIndex.reserve(0x40000);
+		NameByIndex.reserve(0x30000);
 
 		const int32 ObjectCount = ObjectArray::Num();
-		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: scanning {} objects\n", ObjectCount);
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 2-scanning {} objects\n", ObjectCount);
 
 		int32 Collected = 0;
 		for (int32 i = 0; i < ObjectCount; i++)
@@ -965,7 +963,6 @@ void Generator::GenerateNameIndexHeader()
 				const FName Name = Obj.GetFName();
 				const int32 CmpIdx = Name.GetCompIdx();
 				if (CmpIdx <= 0) continue;
-
 				if (NameByIndex.find(CmpIdx) != NameByIndex.end()) continue;
 
 				std::string NameStr = Name.ToString();
@@ -976,74 +973,60 @@ void Generator::GenerateNameIndexHeader()
 			}
 			catch (...) {}
 
-			if (i > 0 && (i & 0xFFFF) == 0)
-			{
-				GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: obj {}/{} collected={}\n",
-					i, ObjectCount, Collected);
-			}
+			if (i > 0 && (i % 50000) == 0)
+				GLogger.FmtWrite(ELogLevel::Info, "GNIH: obj {}/{} collected={}\n", i, ObjectCount, Collected);
 		}
 
-		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: {} names from objects\n", Collected);
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 3-objects done, {} names\n", Collected);
 
-		constexpr int32 PoolScanLimit = 0x2000;
+		constexpr int32 PoolScanLimit = 0x1000;
 		if (GLayouts.NamesLayout && GLayouts.NamesLayout->GetType() == ENamesType::Pool)
 		{
 			int32 PoolCollected = 0;
 			for (int32 i = 0; i < PoolScanLimit; i++)
 			{
 				if (NameByIndex.find(i) != NameByIndex.end()) continue;
-
 				try
 				{
 					std::string NameStr = NameArray::GetNameEntry(i).GetString();
 					if (NameStr.empty() || NameStr.size() > 200) continue;
-
 					NameByIndex.emplace(i, std::move(NameStr));
 					PoolCollected++;
 				}
 				catch (...) {}
 			}
-
-			GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: {} names from pool scan\n", PoolCollected);
+			GLogger.FmtWrite(ELogLevel::Info, "GNIH: 4-pool scan done, +{} names\n", PoolCollected);
 		}
 
-		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: total {} unique names\n",
-			(int)NameByIndex.size());
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 5-total {} unique\n", (int)NameByIndex.size());
 
 		if (NameByIndex.empty())
 		{
-			GLogger.FmtWrite(ELogLevel::Error, "GenerateNameIndexHeader: no names collected\n");
+			GLogger.FmtWrite(ELogLevel::Error, "GNIH: no names\n");
 			return;
 		}
 
-		std::vector<std::pair<int32_t, std::string>> SortedByName;
-		SortedByName.reserve(NameByIndex.size());
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 6-moving to vector\n");
 
-		std::vector<std::pair<int32_t, std::string>> SortedByIndex;
-		SortedByIndex.reserve(NameByIndex.size());
-
+		std::vector<std::pair<int32_t, std::string>> Data;
+		Data.reserve(NameByIndex.size());
 		for (auto& kv : NameByIndex)
-		{
-			SortedByName.push_back(kv);
-			SortedByIndex.push_back(std::move(kv));
-		}
+			Data.emplace_back(kv.first, std::move(kv.second));
+
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 7-freeing map\n");
 		NameByIndex.clear();
 		NameByIndex.rehash(0);
 
-		std::sort(SortedByName.begin(), SortedByName.end(),
-			[](const auto& A, const auto& B) { return A.second < B.second; });
-
-		std::sort(SortedByIndex.begin(), SortedByIndex.end(),
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 8-sorting by index\n");
+		std::sort(Data.begin(), Data.end(),
 			[](const auto& A, const auto& B) { return A.first < B.first; });
 
-		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: writing {} entries\n",
-			(int)SortedByName.size());
-
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 9-opening output\n");
 		const std::string Path = (DumperFolder / "NameIndices.h").string();
 		std::ofstream Out(Path, std::ios::binary);
 		if (!Out.is_open())
 		{
-			GLogger.FmtWrite(ELogLevel::Error, "GenerateNameIndexHeader: cannot open {}\n", Path);
+			GLogger.FmtWrite(ELogLevel::Error, "GNIH: cannot open {}\n", Path);
 			return;
 		}
 
@@ -1054,20 +1037,17 @@ void Generator::GenerateNameIndexHeader()
 		Out << "#include <string>\n\n";
 		Out << "namespace FNameIndices\n{\n\n";
 
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 10-writing kIndexToName\n");
 		Out << "struct IndexEntry { int32_t Idx; const char* Name; };\n\n";
 		Out << "inline const IndexEntry kIndexToName[] = {\n";
-		for (auto& e : SortedByIndex)
+		for (auto& e : Data)
 		{
-			Out << "    {";
-			Out << e.first;
-			Out << ", \"";
+			Out << "    {" << e.first << ", \"";
 			Out << EscapeCString(e.second);
 			Out << "\"},\n";
 		}
 		Out << "};\n\n";
-
 		Out << "inline constexpr size_t kIndexToNameSize = sizeof(kIndexToName) / sizeof(kIndexToName[0]);\n\n";
-
 		Out << "inline const char* IndexToName(int32_t Idx)\n{\n";
 		Out << "    size_t Lo = 0, Hi = kIndexToNameSize;\n";
 		Out << "    while (Lo < Hi) {\n";
@@ -1078,33 +1058,28 @@ void Generator::GenerateNameIndexHeader()
 		Out << "    }\n";
 		Out << "    return \"\";\n";
 		Out << "}\n\n";
+		Out.flush();
 
-		SortedByIndex.clear();
-		SortedByIndex.shrink_to_fit();
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 11-resorting by name\n");
+		std::sort(Data.begin(), Data.end(),
+			[](const auto& A, const auto& B) { return A.second < B.second; });
 
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 12-writing kTable\n");
 		Out << "struct Entry { const char* Name; int32_t Index; };\n\n";
 		Out << "inline const Entry kTable[] = {\n";
-		for (auto& e : SortedByName)
+		for (auto& e : Data)
 		{
 			Out << "    {\"";
 			Out << EscapeCString(e.second);
-			Out << "\", ";
-			Out << e.first;
-			Out << "},\n";
+			Out << "\", " << e.first << "},\n";
 		}
 		Out << "};\n\n";
-
-		SortedByName.clear();
-		SortedByName.shrink_to_fit();
-
 		Out << "inline constexpr size_t kTableSize = sizeof(kTable) / sizeof(kTable[0]);\n\n";
 
 		Out << "inline int32_t Lookup(const char* Name)\n{\n";
 		Out << "    if (!Name || !*Name) return 0;\n";
-		Out << "    size_t Lo = 0;\n";
-		Out << "    size_t Hi = kTableSize;\n";
-		Out << "    while (Lo < Hi)\n";
-		Out << "    {\n";
+		Out << "    size_t Lo = 0, Hi = kTableSize;\n";
+		Out << "    while (Lo < Hi) {\n";
 		Out << "        size_t Mid = (Lo + Hi) / 2;\n";
 		Out << "        int Cmp = std::strcmp(Name, kTable[Mid].Name);\n";
 		Out << "        if (Cmp == 0) return kTable[Mid].Index;\n";
@@ -1117,23 +1092,17 @@ void Generator::GenerateNameIndexHeader()
 		Out << "inline int32_t LookupW(const wchar_t* Name)\n{\n";
 		Out << "    if (!Name || !*Name) return 0;\n";
 		Out << "    std::string Utf8;\n";
-		Out << "    for (const wchar_t* P = Name; *P; ++P)\n";
-		Out << "    {\n";
+		Out << "    for (const wchar_t* P = Name; *P; ++P) {\n";
 		Out << "        uint32_t cp = (uint32_t)*P;\n";
 		Out << "        if (cp < 0x80) Utf8 += (char)cp;\n";
-		Out << "        else if (cp < 0x800)\n";
-		Out << "        {\n";
+		Out << "        else if (cp < 0x800) {\n";
 		Out << "            Utf8 += (char)(0xC0 | (cp >> 6));\n";
 		Out << "            Utf8 += (char)(0x80 | (cp & 0x3F));\n";
-		Out << "        }\n";
-		Out << "        else if (cp < 0x10000)\n";
-		Out << "        {\n";
+		Out << "        } else if (cp < 0x10000) {\n";
 		Out << "            Utf8 += (char)(0xE0 | (cp >> 12));\n";
 		Out << "            Utf8 += (char)(0x80 | ((cp >> 6) & 0x3F));\n";
 		Out << "            Utf8 += (char)(0x80 | (cp & 0x3F));\n";
-		Out << "        }\n";
-		Out << "        else\n";
-		Out << "        {\n";
+		Out << "        } else {\n";
 		Out << "            Utf8 += (char)(0xF0 | (cp >> 18));\n";
 		Out << "            Utf8 += (char)(0x80 | ((cp >> 12) & 0x3F));\n";
 		Out << "            Utf8 += (char)(0x80 | ((cp >> 6) & 0x3F));\n";
@@ -1147,15 +1116,14 @@ void Generator::GenerateNameIndexHeader()
 
 		Out.close();
 
-		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: done, wrote {} names\n",
-			(int)SortedByName.size());
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 13-done, {} names written\n", (int)Data.size());
 	}
 	catch (const std::exception& E)
 	{
-		GLogger.FmtWrite(ELogLevel::Error, "GenerateNameIndexHeader: exception: {}\n", E.what());
+		GLogger.FmtWrite(ELogLevel::Error, "GNIH: exception: {}\n", E.what());
 	}
 	catch (...)
 	{
-		GLogger.FmtWrite(ELogLevel::Error, "GenerateNameIndexHeader: unknown exception\n");
+		GLogger.FmtWrite(ELogLevel::Error, "GNIH: unknown exception\n");
 	}
 }
