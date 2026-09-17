@@ -20,6 +20,7 @@
 #include <thread>
 #include <vector>
 #include <unistd.h>
+
 #include <cstdarg>
 #include <mutex>
 #include <android/log.h>
@@ -50,6 +51,9 @@
 #include "Profile/CustomProfiles/Shared/DeltaForce.h"
 #include "Profile/CustomProfiles/Shared/Fortnite.h"
 
+// ============================================================
+// Log file
+// ============================================================
 #define LOG_TAG "MobileDumper-7"
 
 static FILE*      g_LogFile = nullptr;
@@ -104,6 +108,9 @@ static void CloseLogFile()
     }
 }
 
+// ============================================================
+// Profiles
+// ============================================================
 inline std::vector<std::shared_ptr<IProfile>> UECustomProfiles;
 
 std::vector<std::shared_ptr<IProfile>>& GetUECustomProfiles()
@@ -361,7 +368,7 @@ int main(int Argc, char** Args)
     }
     catch (const std::exception& Err)
     {
-        GLogger.FmtWrite(ELogLevel::Error, "Command Line Error: {}\n\n", Err.what());
+        GLogger.FmtWrite(ELogLevel::Error, "✘ Command Line Error: {}\n\n", Err.what());
         GLogger.FmtWrite(ELogLevel::Info, "{}", Program.help().str());
         CloseLogFile();
         return 1;
