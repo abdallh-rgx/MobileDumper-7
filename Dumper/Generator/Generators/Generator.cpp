@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <ctime>
 #include <fstream>
+#include <string>
+#include <vector>
 
 #include "../../Architecture/IArchDecoder.h"
 #include "../../Engine/OffsetFinder/Layouts.h"
@@ -67,43 +69,11 @@ bool Generator::InitUnrealModule(std::string& OutErrorString)
 
 bool Generator::InitUEAnalyzerKitty(std::string& OutErrorString)
 {
-	GLogger.FmtWrite(ELogLevel::Info, "InitUEAnalyzerKitty: building options...\n");
-
 	UEAnalyzerKitty::AnalyzerOptions Options;
-	Options.ThreadMode    = UEAnalyzerKitty::EThreadMode::Single;
-	Options.Targets       = { UEAnalyzerKitty::Targets::Names,
-                          UEAnalyzerKitty::Targets::GUObjectArray,
-                          UEAnalyzerKitty::Targets::ObjObjects };
-	Options.MaxCandidates = 3;
-	Options.Weights.MinConfidence = 0.55f;
+	Options.ThreadMode = UEAnalyzerKitty::EThreadMode::Two;
+	Options.Targets    = {UEAnalyzerKitty::Targets::Names, UEAnalyzerKitty::Targets::GUObjectArray, UEAnalyzerKitty::Targets::ObjObjects};
 
-	UEAnalyzerKitty::HarvestOptions Harvest;
-	Harvest.MaxSitesPerGlobal   = 64;
-	Harvest.MaxOffsetsPerGlobal = 16;
-	Harvest.ConstantWindow      = 8;
-
-	GLogger.FmtWrite(ELogLevel::Info, "InitUEAnalyzerKitty: starting Analyze...\n");
-
-	try
-	{
-		Analyzer = UEAnalyzerKitty::UEAnalyzer::Analyze(
-		    GMemory.get(), GArchDecoder.get(), Options, Harvest);
-	}
-	catch (const std::exception& e)
-	{
-		OutErrorString = std::string("Analyze threw: ") + e.what();
-		GLogger.FmtWrite(ELogLevel::Error, "{}\n", OutErrorString);
-		return false;
-	}
-	catch (...)
-	{
-		OutErrorString = "Analyze threw unknown exception";
-		GLogger.FmtWrite(ELogLevel::Error, "{}\n", OutErrorString);
-		return false;
-	}
-
-	GLogger.FmtWrite(ELogLevel::Info, "InitUEAnalyzerKitty: Analyze returned, IsValid={}\n", Analyzer.IsValid());
-
+	Analyzer = UEAnalyzerKitty::UEAnalyzer::Analyze(GMemory.get(), GArchDecoder.get(), Options);
 	if (!Analyzer.IsValid())
 	{
 		OutErrorString = Analyzer.GetError();
@@ -125,8 +95,6 @@ bool Generator::InitObjects(std::string& OutErrorString)
 		GProfile->DecryptObjectItem(Item);
 	});
 
-	// Resolves and then independently validates one interpretation of a candidate.
-	// Every stage reports its outcome, so a failing run shows exactly how far it got.
 	auto TryGObjectsAt = [](uintptr_t ArrayAddress, const char* Interpretation) -> bool
 	{
 		if (!GProfile->ResolveGObjectsLayout(ArrayAddress, GLayouts.ObjectsLayout))
@@ -177,26 +145,25 @@ bool Generator::InitObjects(std::string& OutErrorString)
 			Address = DecAddress;
 		}
 
-		if (TryGObjectsAt(Address, "Direct"))
+		GObjects = Address;
+		if (TryGObjectsAt(GObjects, "Direct"))
 		{
-			GObjects                       = Address;
 			GInSDKOffsets.Statics.GObjects = ObjectsOffset;
 			GLogger.FmtWrite(ELogLevel::Info, "InitObjects: GObjects accepted at 0x{:X} (Direct)\n", GObjects);
 			return true;
 		}
 
-		const uintptr_t CandidateDeref = GMemory->Read<uintptr_t>(Address);
-		if (!GMemory->IsAddressReadable(CandidateDeref))
+		GObjects = GMemory->Read<uintptr_t>(GObjects);
+		if (!GMemory->IsAddressReadable(GObjects))
 		{
 			GLogger.FmtWrite(ELogLevel::Info, "InitObjects: [Dereference] Skipped - 0x{:X} does not hold a readable pointer.\n", Address);
 			return false;
 		}
 
-		GLogger.FmtWrite(ELogLevel::Info, "InitObjects: Dereferencing 0x{:X} -> 0x{:X}\n", Address, CandidateDeref);
+		GLogger.FmtWrite(ELogLevel::Info, "InitObjects: Dereferencing 0x{:X} -> 0x{:X}\n", Address, GObjects);
 
-		if (TryGObjectsAt(CandidateDeref, "Dereference"))
+		if (TryGObjectsAt(GObjects, "Dereference"))
 		{
-			GObjects                       = CandidateDeref;
 			GInSDKOffsets.Statics.GObjects = ObjectsOffset;
 			GLogger.FmtWrite(ELogLevel::Info, "InitObjects: GObjects accepted at 0x{:X} (Dereference of 0x{:X})\n", GObjects, Address);
 			return true;
@@ -211,11 +178,13 @@ bool Generator::InitObjects(std::string& OutErrorString)
 
 	if (GMemory->IsAddressReadable(GObjects))
 	{
+		GLogger.FmtWrite(ELogLevel::Info, "InitObjects: IProfile::GetGObjects() returned valid address (0x{:X})\n", GObjects);
+
 		bSuccess = InitGObjectsVars(GObjects, "User Profile", 1.00f);
 	}
 	else
 	{
-		GLogger.FmtWrite(ELogLevel::Warning, "InitObjects: IProfile::GetGObjects() returned 0, falling back to UEAnalyzerKitty...\n");
+		GLogger.FmtWrite(ELogLevel::Warning, "InitObjects: IProfile::GetGObjects() returned invalid address (0x{:X}), falling back to UEAnalyzerKitty...\n", GObjects);
 
 		auto Result = Generator::Analyzer.Find(UEAnalyzerKitty::Targets::GUObjectArray);
 		if (Result.Candidates.empty())
@@ -299,18 +268,16 @@ bool Generator::InitNames(std::string& OutErrorString)
 		GProfile->DecryptUTF32(Data, Len);
 	});
 
-	NameArray::SetDecryptNameChunkFn([](uintptr_t& ChunkAddr)
+	NameArray::SetDecryptNameChunkFn([](int32 ChunkIdx, uintptr_t& ChunkAddr)
 	{
-		GProfile->DecryptNameChunk(GNames, GLayouts.NamesLayout, ChunkAddr);
+		GProfile->DecryptNameChunk(GNames, ChunkIdx, ChunkAddr);
 	});
 
 	NameArray::SetDecryptNameEntryFn([](uintptr_t& NameEntry)
 	{
-		GProfile->DecryptNameEntry(GNames, GLayouts.NamesLayout, NameEntry);
+		GProfile->DecryptNameEntry(GNames, NameEntry);
 	});
 
-	// Resolves and then independently validates one interpretation of a candidate.
-	// Every stage reports its outcome, so a failing run shows exactly how far it got.
 	auto TryGNamesAt = [](uintptr_t NamesAddress, const char* Interpretation) -> bool
 	{
 		if (!GProfile->ResolveGNamesLayout(NamesAddress, GLayouts.NamesLayout))
@@ -361,26 +328,25 @@ bool Generator::InitNames(std::string& OutErrorString)
 			Address = DecAddress;
 		}
 
-		if (TryGNamesAt(Address, "Direct"))
+		GNames = Address;
+		if (TryGNamesAt(GNames, "Direct"))
 		{
-			GNames                       = Address;
 			GInSDKOffsets.Statics.GNames = NamesOffset;
 			GLogger.FmtWrite(ELogLevel::Info, "InitNames: GNames accepted at 0x{:X} (Direct)\n", GNames);
 			return true;
 		}
 
-		const uintptr_t CandidateDeref = GMemory->Read<uintptr_t>(Address);
-		if (!GMemory->IsAddressReadable(CandidateDeref))
+		GNames = GMemory->Read<uintptr_t>(GNames);
+		if (!GMemory->IsAddressReadable(GNames))
 		{
 			GLogger.FmtWrite(ELogLevel::Info, "InitNames: [Dereference] Skipped - 0x{:X} does not hold a readable pointer.\n", Address);
 			return false;
 		}
 
-		GLogger.FmtWrite(ELogLevel::Info, "InitNames: Dereferencing 0x{:X} -> 0x{:X}\n", Address, CandidateDeref);
+		GLogger.FmtWrite(ELogLevel::Info, "InitNames: Dereferencing 0x{:X} -> 0x{:X}\n", Address, GNames);
 
-		if (TryGNamesAt(CandidateDeref, "Dereference"))
+		if (TryGNamesAt(GNames, "Dereference"))
 		{
-			GNames                       = CandidateDeref;
 			GInSDKOffsets.Statics.GNames = NamesOffset;
 			GLogger.FmtWrite(ELogLevel::Info, "InitNames: GNames accepted at 0x{:X} (Dereference of 0x{:X})\n", GNames, Address);
 			return true;
@@ -395,11 +361,13 @@ bool Generator::InitNames(std::string& OutErrorString)
 
 	if (GMemory->IsAddressReadable(GNames))
 	{
+		GLogger.FmtWrite(ELogLevel::Info, "InitNames: IProfile::GetGNames() returned valid address (0x{:X})\n", GNames);
+
 		bSuccess = InitGNamesVars(GNames, "User Profile", 1.00f);
 	}
 	else
 	{
-		GLogger.FmtWrite(ELogLevel::Warning, "InitNames: IProfile::GetGNames() returned 0, falling back to UEAnalyzerKitty...\n");
+		GLogger.FmtWrite(ELogLevel::Warning, "InitNames: IProfile::GetGNames() returned invalid address (0x{:X}), falling back to UEAnalyzerKitty...\n", GNames);
 
 		auto Result = Generator::Analyzer.Find(UEAnalyzerKitty::Targets::Names);
 
@@ -442,8 +410,6 @@ bool Generator::InitNames(std::string& OutErrorString)
 		GLogger.FmtWrite(ELogLevel::Info, "FNameEntry::Stride: 0x{:X}\n", (uint32_t)L->FNameEntry.Stride);
 		GLogger.FmtWrite(ELogLevel::Info, "FNameEntry::Header: 0x{:X}\n", (uint32_t)L->FNameEntry.Header);
 		GLogger.FmtWrite(ELogLevel::Info, "FNameEntry::String: 0x{:X}\n", (uint32_t)L->FNameEntry.String);
-		GLogger.FmtWrite(ELogLevel::Info, "FNameEntry::NameWideMask: 0x{:X}\n", (uint32_t)L->FNameEntry.NameWideMask);
-		GLogger.FmtWrite(ELogLevel::Info, "FNameEntry::LengthShiftCount: 0x{:X}\n", (uint32_t)L->FNameEntry.LengthShiftCount);
 	}
 	else
 	{
@@ -693,23 +659,18 @@ bool Generator::InitInternalSettings(std::string& OutErrorString)
 void Generator::InitManagers()
 {
 	GLogger.FmtWrite(ELogLevel::Info, "(Early) Initializing PackageManager...\n");
-	// Initialize PackageManager with all packages, their names, structs, classes enums, functions and dependencies
 	PackageManager::Init();
 
 	GLogger.FmtWrite(ELogLevel::Info, "Initializing StructManager...\n");
-	// Initialize StructManager with all structs and their names
 	StructManager::Init();
 
 	GLogger.FmtWrite(ELogLevel::Info, "Initializing EnumManager...\n");
-	// Initialize EnumManager with all enums and their names
 	EnumManager::Init();
 
 	GLogger.FmtWrite(ELogLevel::Info, "Initializing MemberManager...\n");
-	// Initialized all Member-Name collisions
 	MemberManager::Init();
 
 	GLogger.FmtWrite(ELogLevel::Info, "(Late) Initializing PackageManager...\n");
-	// Post-Initialize PackageManager after StructManager has been initialized. 'PostInit()' handles Cyclic-Dependencies detection
 	PackageManager::PostInit();
 
 	GLogger.FmtWrite(ELogLevel::Info, "Managers Initialized.\n");
@@ -879,7 +840,6 @@ void Generator::GenerateObjectsWithPropertiesDump(bool bWithPathname)
 	DumpStream.close();
 }
 
-
 void Generator::GenerateEditorOnlyMetadataDump()
 {
 	if (GOffsets.FField.EditorOnlyMetadata == -1)
@@ -903,7 +863,7 @@ void Generator::GenerateEditorOnlyMetadataDump()
 		UEStruct Struct = Obj.Cast<UEStruct>();
 
 		std::vector<UEProperty> ChildProperties = Struct.GetProperties();
-		if (ChildProperties.empty()) // Avoids allocating string for GetCppName() and prevents json from auto-creating empty objects for property-less structs
+		if (ChildProperties.empty())
 			continue;
 
 		auto& StructMembers = MetadataJson[Struct.GetCppName()];
@@ -924,4 +884,203 @@ void Generator::GenerateEditorOnlyMetadataDump()
 
 	std::ofstream MetadataFile(DumperFolder / "Metadata.json");
 	MetadataFile << MetadataJson.dump(4);
+}
+
+static std::string EscapeCString(const std::string& s)
+{
+	std::string out;
+	out.reserve(s.size() + 8);
+	for (char c : s)
+	{
+		if (c == '\\') out += "\\\\";
+		else if (c == '"') out += "\\\"";
+		else if (c == '\n') out += "\\n";
+		else if (c == '\r') out += "\\r";
+		else if (c == '\t') out += "\\t";
+		else out += c;
+	}
+	return out;
+}
+
+static std::wstring Utf8ToWString(const std::string& s)
+{
+	std::wstring out;
+	out.reserve(s.size());
+	size_t i = 0;
+	while (i < s.size())
+	{
+		unsigned char c = (unsigned char)s[i];
+		uint32_t cp = 0;
+		int extra = 0;
+		if (c < 0x80) { cp = c; extra = 0; }
+		else if ((c & 0xE0) == 0xC0) { cp = c & 0x1F; extra = 1; }
+		else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; extra = 2; }
+		else if ((c & 0xF8) == 0xF0) { cp = c & 0x07; extra = 3; }
+		else { i++; continue; }
+		i++;
+		for (int j = 0; j < extra && i < s.size(); j++, i++)
+			cp = (cp << 6) | ((unsigned char)s[i] & 0x3F);
+		out.push_back((wchar_t)cp);
+	}
+	return out;
+}
+
+static std::string WStringToUtf8(const std::wstring& s)
+{
+	std::string out;
+	out.reserve(s.size());
+	for (wchar_t wc : s)
+	{
+		uint32_t cp = (uint32_t)wc;
+		if (cp < 0x80) out += (char)cp;
+		else if (cp < 0x800)
+		{
+			out += (char)(0xC0 | (cp >> 6));
+			out += (char)(0x80 | (cp & 0x3F));
+		}
+		else if (cp < 0x10000)
+		{
+			out += (char)(0xE0 | (cp >> 12));
+			out += (char)(0x80 | ((cp >> 6) & 0x3F));
+			out += (char)(0x80 | (cp & 0x3F));
+		}
+		else
+		{
+			out += (char)(0xF0 | (cp >> 18));
+			out += (char)(0x80 | ((cp >> 12) & 0x3F));
+			out += (char)(0x80 | ((cp >> 6) & 0x3F));
+			out += (char)(0x80 | (cp & 0x3F));
+		}
+	}
+	return out;
+}
+
+void Generator::GenerateNameIndexHeader()
+{
+	struct Entry
+	{
+		std::string Utf8Name;
+		std::wstring WideName;
+		int32_t Index;
+	};
+
+	std::vector<Entry> Entries;
+	Entries.reserve(0x30000);
+
+	const int32 Cap = 0x400000;
+	int32 EmptyStreak = 0;
+	int32 LastValid = -1;
+
+	for (int32 i = 0; i < Cap; i++)
+	{
+		std::string Name;
+		try { Name = NameArray::GetNameEntry(i).GetString(); }
+		catch (...) { Name = ""; }
+
+		if (Name.empty())
+		{
+			EmptyStreak++;
+			if (EmptyStreak >= 0x2000) break;
+			continue;
+		}
+
+		EmptyStreak = 0;
+		LastValid = i;
+
+		Entry E;
+		E.Utf8Name = Name;
+		E.WideName = Utf8ToWString(Name);
+		E.Index = i;
+		if (!E.WideName.empty())
+			Entries.push_back(std::move(E));
+	}
+
+	std::sort(Entries.begin(), Entries.end(), [](const Entry& A, const Entry& B)
+	{
+		if (A.WideName != B.WideName) return A.WideName < B.WideName;
+		return A.Index < B.Index;
+	});
+	Entries.erase(std::unique(Entries.begin(), Entries.end(),
+		[](const Entry& A, const Entry& B) { return A.WideName == B.WideName; }),
+		Entries.end());
+
+	const std::string Path = (DumperFolder / "NameIndices.h").string();
+	std::ofstream Out(Path, std::ios::binary);
+	if (!Out.is_open())
+	{
+		GLogger.FmtWrite(ELogLevel::Error, "GenerateNameIndexHeader: cannot open {}\n", Path);
+		return;
+	}
+
+	Out << "#pragma once\n";
+	Out << "#include <cstdint>\n";
+	Out << "#include <cstring>\n";
+	Out << "#include <cwchar>\n";
+	Out << "#include <string>\n\n";
+	Out << "namespace FNameIndices\n{\n\n";
+
+	Out << "inline constexpr int32_t kCount = " << (LastValid + 1) << ";\n\n";
+	Out << "inline const char* const kIndexToName[] = {\n";
+	for (int32 i = 0; i <= LastValid; i++)
+	{
+		std::string Name;
+		try { Name = NameArray::GetNameEntry(i).GetString(); }
+		catch (...) { Name = ""; }
+
+		Out << "    \"";
+		Out << EscapeCString(Name);
+		Out << "\",\n";
+	}
+	Out << "};\n\n";
+
+	Out << "inline const char* IndexToName(int32_t Idx)\n{\n";
+	Out << "    if (Idx < 0 || Idx >= kCount) return \"\";\n";
+	Out << "    return kIndexToName[Idx];\n";
+	Out << "}\n\n";
+
+	Out << "struct Entry\n{\n";
+	Out << "    const wchar_t* Name;\n";
+	Out << "    int32_t Index;\n";
+	Out << "};\n\n";
+
+	Out << "inline const Entry kTable[] = {\n";
+	for (const Entry& E : Entries)
+	{
+		std::string WideUtf8 = WStringToUtf8(E.WideName);
+		Out << "    {L\"";
+		Out << EscapeCString(WideUtf8);
+		Out << "\", ";
+		Out << E.Index;
+		Out << "},\n";
+	}
+	Out << "};\n\n";
+
+	Out << "inline constexpr size_t kTableSize = sizeof(kTable) / sizeof(kTable[0]);\n\n";
+
+	Out << "inline int32_t Lookup(const wchar_t* Name)\n{\n";
+	Out << "    if (!Name || !*Name) return 0;\n";
+	Out << "    size_t Lo = 0;\n";
+	Out << "    size_t Hi = kTableSize;\n";
+	Out << "    while (Lo < Hi)\n";
+	Out << "    {\n";
+	Out << "        size_t Mid = (Lo + Hi) / 2;\n";
+	Out << "        int Cmp = std::wcscmp(Name, kTable[Mid].Name);\n";
+	Out << "        if (Cmp == 0) return kTable[Mid].Index;\n";
+	Out << "        if (Cmp < 0) Hi = Mid;\n";
+	Out << "        else Lo = Mid + 1;\n";
+	Out << "    }\n";
+	Out << "    return 0;\n";
+	Out << "}\n\n";
+
+	Out << "inline int32_t LookupUtf8(const std::string& Name)\n{\n";
+	Out << "    std::wstring W(Name.begin(), Name.end());\n";
+	Out << "    return Lookup(W.c_str());\n";
+	Out << "}\n\n";
+
+	Out << "} // namespace FNameIndices\n";
+
+	Out.close();
+
+	GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: wrote {} entries to {}\n",
+		(int)Entries.size(), Path);
 }
