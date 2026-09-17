@@ -198,6 +198,14 @@ bool FDumperMain::Run(std::string& OutDumpZip, std::string& OutErrorString)
 		}
 	}
 
+	OnProgressCallback("Generating NameIndices.h...\n");
+	{
+		std::chrono::high_resolution_clock::time_point Start = std::chrono::high_resolution_clock::now();
+		Generator::GenerateNameIndexHeader();
+		auto Elapsed = std::chrono::high_resolution_clock::now() - Start;
+		GLogger.FmtWrite(ELogLevel::Info, "Generated in {}\n", Utils::ChronoDurationToString(Elapsed));
+	}
+
 	if (GSettings.Generator.bGenerateGObjectsWithProps)
 	{
 		OnProgressCallback("Generating GObjects With Props Dump...\n");
