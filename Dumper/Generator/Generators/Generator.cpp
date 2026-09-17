@@ -944,7 +944,7 @@ static std::string EscapeCString(const std::string& s)
 
 void Generator::GenerateNameIndexHeader()
 {
-	GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: starting (object-based)\n");
+	GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: starting\n");
 
 	try
 	{
@@ -985,7 +985,7 @@ void Generator::GenerateNameIndexHeader()
 
 		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: {} names from objects\n", Collected);
 
-		const int32 PoolScanLimit = 0x10000;
+		constexpr int32 PoolScanLimit = 0x2000;
 		if (GLayouts.NamesLayout && GLayouts.NamesLayout->GetType() == ENamesType::Pool)
 		{
 			int32 PoolCollected = 0;
@@ -1002,12 +1002,6 @@ void Generator::GenerateNameIndexHeader()
 					PoolCollected++;
 				}
 				catch (...) {}
-
-				if (i > 0 && (i & 0x3FFF) == 0)
-				{
-					GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: pool {}/{} collected={}\n",
-						i, PoolScanLimit, PoolCollected);
-				}
 			}
 
 			GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: {} names from pool scan\n", PoolCollected);
@@ -1022,30 +1016,28 @@ void Generator::GenerateNameIndexHeader()
 			return;
 		}
 
-		int32 LastValid = 0;
-		for (const auto& kv : NameByIndex)
-		{
-			if (kv.first > LastValid) LastValid = kv.first;
-		}
+		std::vector<std::pair<int32_t, std::string>> SortedByName;
+		SortedByName.reserve(NameByIndex.size());
 
-		std::vector<std::pair<int32_t, std::string>> Sorted;
-		Sorted.reserve(NameByIndex.size());
+		std::vector<std::pair<int32_t, std::string>> SortedByIndex;
+		SortedByIndex.reserve(NameByIndex.size());
 
-		std::vector<std::string> ByIndex((size_t)LastValid + 1);
 		for (auto& kv : NameByIndex)
 		{
-			if (kv.first >= 0 && kv.first <= LastValid)
-				ByIndex[(size_t)kv.first] = kv.second;
-
-			Sorted.emplace_back(kv.first, std::move(kv.second));
+			SortedByName.push_back(kv);
+			SortedByIndex.push_back(std::move(kv));
 		}
 		NameByIndex.clear();
+		NameByIndex.rehash(0);
 
-		std::sort(Sorted.begin(), Sorted.end(),
+		std::sort(SortedByName.begin(), SortedByName.end(),
 			[](const auto& A, const auto& B) { return A.second < B.second; });
 
-		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: writing {} entries (maxIdx=0x{:X})\n",
-			(int)Sorted.size(), LastValid);
+		std::sort(SortedByIndex.begin(), SortedByIndex.end(),
+			[](const auto& A, const auto& B) { return A.first < B.first; });
+
+		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: writing {} entries\n",
+			(int)SortedByName.size());
 
 		const std::string Path = (DumperFolder / "NameIndices.h").string();
 		std::ofstream Out(Path, std::ios::binary);
@@ -1062,31 +1054,37 @@ void Generator::GenerateNameIndexHeader()
 		Out << "#include <string>\n\n";
 		Out << "namespace FNameIndices\n{\n\n";
 
-		Out << "inline constexpr int32_t kCount = " << (LastValid + 1) << ";\n\n";
-		Out << "inline const char* const kIndexToName[] = {\n";
-		for (auto& s : ByIndex)
+		Out << "struct IndexEntry { int32_t Idx; const char* Name; };\n\n";
+		Out << "inline const IndexEntry kIndexToName[] = {\n";
+		for (auto& e : SortedByIndex)
 		{
-			Out << "    \"";
-			Out << EscapeCString(s);
-			Out << "\",\n";
+			Out << "    {";
+			Out << e.first;
+			Out << ", \"";
+			Out << EscapeCString(e.second);
+			Out << "\"},\n";
 		}
 		Out << "};\n\n";
 
-		ByIndex.clear();
-		ByIndex.shrink_to_fit();
+		Out << "inline constexpr size_t kIndexToNameSize = sizeof(kIndexToName) / sizeof(kIndexToName[0]);\n\n";
 
 		Out << "inline const char* IndexToName(int32_t Idx)\n{\n";
-		Out << "    if (Idx < 0 || Idx >= kCount) return \"\";\n";
-		Out << "    return kIndexToName[Idx];\n";
+		Out << "    size_t Lo = 0, Hi = kIndexToNameSize;\n";
+		Out << "    while (Lo < Hi) {\n";
+		Out << "        size_t Mid = (Lo + Hi) / 2;\n";
+		Out << "        if (kIndexToName[Mid].Idx == Idx) return kIndexToName[Mid].Name;\n";
+		Out << "        if (kIndexToName[Mid].Idx < Idx) Lo = Mid + 1;\n";
+		Out << "        else Hi = Mid;\n";
+		Out << "    }\n";
+		Out << "    return \"\";\n";
 		Out << "}\n\n";
 
-		Out << "struct Entry\n{\n";
-		Out << "    const char* Name;\n";
-		Out << "    int32_t Index;\n";
-		Out << "};\n\n";
+		SortedByIndex.clear();
+		SortedByIndex.shrink_to_fit();
 
+		Out << "struct Entry { const char* Name; int32_t Index; };\n\n";
 		Out << "inline const Entry kTable[] = {\n";
-		for (auto& e : Sorted)
+		for (auto& e : SortedByName)
 		{
 			Out << "    {\"";
 			Out << EscapeCString(e.second);
@@ -1096,8 +1094,8 @@ void Generator::GenerateNameIndexHeader()
 		}
 		Out << "};\n\n";
 
-		Sorted.clear();
-		Sorted.shrink_to_fit();
+		SortedByName.clear();
+		SortedByName.shrink_to_fit();
 
 		Out << "inline constexpr size_t kTableSize = sizeof(kTable) / sizeof(kTable[0]);\n\n";
 
@@ -1149,8 +1147,8 @@ void Generator::GenerateNameIndexHeader()
 
 		Out.close();
 
-		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: wrote {} entries to {}\n",
-			(int)(LastValid + 1), Path);
+		GLogger.FmtWrite(ELogLevel::Info, "GenerateNameIndexHeader: done, wrote {} names\n",
+			(int)SortedByName.size());
 	}
 	catch (const std::exception& E)
 	{
