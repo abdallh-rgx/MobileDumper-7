@@ -9,7 +9,15 @@
 // Tables taken from the llvm-project repository on github
 // LLVMs license: https://llvm.org/LICENSE.txt
 
-using UnicodeCharRange = std::pair<char32_t, char32_t>;
+/* Trivial aggregate instead of std::pair: pair::operator= is not constexpr in the
+ * libc++ shipped with NDK r25 (clang 14), which broke consteval table construction.
+ * Field names (.first/.second) and brace-initialization are unchanged, so all
+ * existing usages compile identically. */
+struct UnicodeCharRange
+{
+    char32_t first;
+    char32_t second;
+};
 
 template<uint32_t Size>
 class UnicodeRangeTable
@@ -27,7 +35,11 @@ private:
 public:
     consteval UnicodeRangeTable(const UnicodeCharRange(&Ranges)[Size])
     {
-        std::copy_n(Ranges, Size, std::begin(CharRanges));
+        /* Manual constexpr loop instead of std::copy_n: std::copy_n is not constexpr
+         * in libc++ shipped with NDK r25 (clang 14); the loop is semantically identical
+         * and constexpr-clean on every libc++ version. */
+        for (uint32_t i = 0; i < Size; i++)
+            CharRanges[i] = Ranges[i];
     }
 
     /* Restrict access to this function to friend functions to guarantee checks for XID_Continue also check XID_Start */

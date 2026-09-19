@@ -42,6 +42,79 @@ endif()
 
 file(GLOB KITTYMEM_SRC "${KITTYMEM_PATH}/*.cpp")
 
+# ── Embedding core ────────────────────────────────────────────────────────────
+#
+# Builds ONLY the FNamePool-reading core as a static library (libMobileDumperCore.a)
+# for embedding into other projects (e.g. OwenGameServer).
+#
+# What is included:  MD7CoreDefs.cpp (globals), NameArray.cpp, UnrealTypes.cpp
+# What is excluded:  main_android.cpp (the __attribute__((constructor)) entry point),
+#                    DumperMain.cpp (RunDump), Generator/* (SDK/zip/idmap/dumpspace/
+#                    mappings generation), UEAnalyzerKitty, MemoryAndroid.cpp
+#                    (KittyMemoryEx), ObjectArray, UnrealObjects, UnrealContainers,
+#                    Layouts.cpp / Offsets.cpp (layout & offset detectors), Utils.cpp,
+#                    Logger.cpp, Zip/Json/Compression, all iOS sources.
+#
+# Result: an .a with NO constructor, NO dumper entry point and NO KittyMemoryEx.
+option(MD7_BUILD_CORE "Build ONLY the minimal FNamePool-reading core (libMobileDumperCore.a) for embedding into other projects" OFF)
+
+if(MD7_BUILD_CORE)
+    if(NOT (CMAKE_SYSTEM_NAME STREQUAL "Android" OR ANDROID))
+        message(FATAL_ERROR "MD7_BUILD_CORE requires an Android toolchain (-DCMAKE_SYSTEM_NAME=Android -DANDROID_ABI=arm64-v8a).")
+    endif()
+
+    add_library(MobileDumperCore STATIC
+        "${DUMPER_ROOT}/Dumper/Core/MD7CoreDefs.cpp"
+        "${DUMPER_ROOT}/Dumper/Engine/Unreal/NameArray.cpp"
+        "${DUMPER_ROOT}/Dumper/Engine/Unreal/UnrealTypes.cpp"
+    )
+
+    target_include_directories(MobileDumperCore PUBLIC
+        "${DUMPER_ROOT}"          # consumers include as "Dumper/Memory/IMemory.h" etc.
+        "${DUMPER_ROOT}/Dumper"   # internal quote-relative includes
+        "${FMT_PATH}/include"     # NameArray.cpp -> Utils/Logger.h -> <fmt/format.h> (header-only, FMT_HEADER_ONLY: no fmt code is emitted)
+    )
+
+    target_compile_definitions(MobileDumperCore PRIVATE
+        FMT_HEADER_ONLY
+        kNO_KEYSTONE
+    )
+
+    target_compile_options(MobileDumperCore PRIVATE
+        -fexceptions
+        -frtti
+        -fvisibility=hidden
+        -fvisibility-inlines-hidden
+        -ffunction-sections
+        -fdata-sections
+        ${DISABLED_WARNINGS}
+        $<$<CONFIG:Debug>:-O0 -g3 -fno-omit-frame-pointer>
+        $<$<CONFIG:Release>:-O2 -g0 -fomit-frame-pointer>
+    )
+
+    set_target_properties(MobileDumperCore PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+        POSITION_INDEPENDENT_CODE ON
+    )
+
+    # No target_link_libraries on purpose: the core has zero link dependencies
+    # (no KittyMemoryEx, no android/log, no fmt binaries, no zlib).
+
+    message(STATUS "==============================================")
+    message(STATUS "MobileDumper-7 CORE (embedding mode)")
+    message(STATUS "Output: libMobileDumperCore.a")
+    message(STATUS "Sources: MD7CoreDefs.cpp + NameArray.cpp + UnrealTypes.cpp")
+    message(STATUS "Excluded: main_android.cpp (constructor), DumperMain (RunDump),")
+    message(STATUS "Generator/*, UEAnalyzerKitty, MemoryAndroid + KittyMemoryEx,")
+    message(STATUS "ObjectArray, UnrealObjects, UnrealContainers, detectors, Utils.cpp,")
+    message(STATUS "Logger.cpp, Zip/Json/Dumpspace/iOS sources")
+    message(STATUS "==============================================")
+    return()
+endif()
+
+
 # ── Dumper sources ────────────────────────────────────────────────────────────
 
 file(GLOB_RECURSE DUMPER_SRC
