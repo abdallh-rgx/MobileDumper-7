@@ -991,7 +991,6 @@ bool FInGenOffsets::Init_UStruct_Children()
 	std::vector<std::pair<void*, void*>> Infos;
 
 	bool FInGenOffsets::Init_UStruct_Children()
-{
 	this->UStruct.Children = OffsetFinder::OffsetNotFound;
 
 	const bool bHasFField =
