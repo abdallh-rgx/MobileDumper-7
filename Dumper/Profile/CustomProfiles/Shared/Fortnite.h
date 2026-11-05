@@ -9,10 +9,7 @@ public:
 
     std::vector<std::string> GetSupportedGames() const override
     {
-        return {
-            "com.epicgames.fortnite1241",
-            "com.epicgames.fn"
-        };
+        return {};
     }
 
     uintptr_t GetGObjects() const override
@@ -29,7 +26,7 @@ public:
 
     void OverrideInSKOffsets(FInSDKOffsets& Offsets) const override
     {
-        Offsets.Statics.GWorld = 0;
+        Offsets.Statics.GWorld  = 0x10191070;
         Offsets.Statics.GEngine = 0xDFDA008;
     }
 
