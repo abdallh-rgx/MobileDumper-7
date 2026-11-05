@@ -215,6 +215,7 @@ bool RunDump(int GamePid, const std::string& GamePackage, EKittyMemOP MemOp = EK
     GArchDecoder = CreateArchDecoder(EArch::Arm32);
 #endif
 
+    GProfile = nullptr;
     for (const auto& it : GetUECustomProfiles())
     {
         for (const auto& Identifier : it->GetSupportedGames())
@@ -223,15 +224,27 @@ bool RunDump(int GamePid, const std::string& GamePackage, EKittyMemOP MemOp = EK
             {
                 GLogger.FmtWrite(ELogLevel::Info, "Using Custom UE Profile Override ({}).\n", Identifier);
                 GProfile = it;
-                goto DumpLabel;
+                break;
             }
+        }
+        if (GProfile) break;
+    }
+
+    if (!GProfile)
+    {
+        auto& Profiles = GetUECustomProfiles();
+        if (!Profiles.empty())
+        {
+            GProfile = Profiles.back();
+            GLogger.FmtWrite(ELogLevel::Info, "No explicit package match — using fallback Custom UE Profile (last registered).\n");
+        }
+        else
+        {
+            GLogger.FmtWrite(ELogLevel::Info, "Using Generic UE Profile.\n");
+            GProfile = std::make_shared<IProfile>();
         }
     }
 
-    GLogger.FmtWrite(ELogLevel::Info, "Using Generic UE Profile.\n");
-    GProfile = std::make_shared<IProfile>();
-
-DumpLabel:
     std::string OutDumpZip, OutErr;
     bool bSuccess = false;
     bool bIsBitOk = false;
@@ -323,31 +336,225 @@ DumpLabel:
 
 #ifndef DUMPER_BUILD_EXECUTABLE
 
+static uintptr_t FindUE4Base()
+{
+    FILE* f = fopen("/proc/self/maps", "r");
+    if (!f) return 0;
+    char Line[512];
+    uintptr_t Base = 0;
+    while (fgets(Line, sizeof(Line), f))
+    {
+        if (strstr(Line, "libUE4.so"))
+        {
+            uintptr_t Start = 0;
+            if (sscanf(Line, "%lx-", &Start) == 1)
+            {
+                Base = Start;
+                break;
+            }
+        }
+    }
+    fclose(f);
+    return Base;
+}
+
+static std::string DecodeFName(uintptr_t Base, uint32_t NameIdx)
+{
+    if (NameIdx == 0 || NameIdx == 0xFFFFFFFF) return "";
+    uintptr_t PoolBase = Base + 0x101B5EC0;
+    uint32_t BlockIdx = (NameIdx >> 16) & 0x3FFF;
+    uint32_t Offset = NameIdx & 0xFFFF;
+    uintptr_t BlockPtr = *(uintptr_t*)(PoolBase + BlockIdx * 8);
+    if (!BlockPtr)
+    {
+        uintptr_t Blocks = *(uintptr_t*)PoolBase;
+        if (Blocks) BlockPtr = *(uintptr_t*)(Blocks + BlockIdx * 8);
+    }
+    if (!BlockPtr) return "";
+    uintptr_t Entry = BlockPtr + Offset;
+    uint16_t Header = *(uint16_t*)Entry;
+    for (int Shift : {1, 6})
+    {
+        uint32_t Len = Header >> Shift;
+        if (Len == 0 || Len > 512) continue;
+        bool Wide = Header & 1;
+        std::string Out;
+        if (Wide)
+        {
+            char16_t* W = (char16_t*)(Entry + 2);
+            for (uint32_t i = 0; i < Len && i < 256; i++)
+                Out += (W[i] < 128) ? (char)W[i] : '?';
+        }
+        else
+        {
+            const char* S = (const char*)(Entry + 2);
+            Out.assign(S, Len);
+        }
+        bool Valid = !Out.empty();
+        for (char c : Out) if (c < 32 || c > 126) { Valid = false; break; }
+        if (Valid) return Out;
+    }
+    return "";
+}
+
+static std::string GetWorldName(uintptr_t Base)
+{
+    uintptr_t GWorldAddr = Base + 0x10191070;
+    void* World = *(void**)GWorldAddr;
+    if (!World) return "";
+    uint32_t NameIdx = *(uint32_t*)((uintptr_t)World + 0x18);
+    return DecodeFName(Base, NameIdx);
+}
+
+static int CountNonZeroObjects(uintptr_t Base, int SampleSize)
+{
+    uintptr_t GObjBase = Base + 0x10249200;
+    void* ObjObjects = (void*)(GObjBase + 0x10);
+    void* ChunksPtr = *(void**)ObjObjects;
+    if (!ChunksPtr) return -1;
+    int NumElements = *(int*)((uintptr_t)ObjObjects + 0x14);
+    if (NumElements <= 0 || NumElements > 5000000) return -1;
+    int ValidCount = 0;
+    for (int i = 0; i < SampleSize; ++i)
+    {
+        int Idx = (int)((long long)i * NumElements / SampleSize);
+        int ChunkIdx = Idx >> 16;
+        int InChunk = Idx & 0xFFFF;
+        uintptr_t ChunkArray = *(uintptr_t*)ChunksPtr;
+        if (!ChunkArray) continue;
+        uintptr_t Chunk = *(uintptr_t*)(ChunkArray + ChunkIdx * 8);
+        if (!Chunk) continue;
+        void* Obj = *(void**)(Chunk + InChunk * 24);
+        if (Obj) ++ValidCount;
+    }
+    return ValidCount;
+}
+
 __attribute__((constructor)) static void OnLibraryLoad()
 {
     std::thread([]()
     {
-        sleep(60);
+        uintptr_t Base = 0;
+        for (int i = 0; i < 1800 && !Base; ++i)
+        {
+            Base = FindUE4Base();
+            if (!Base) sleep(1);
+        }
+        if (!Base)
+        {
+            LOGF("Timeout: libUE4.so never loaded (PartyHub stuck?)");
+            return;
+        }
+        LOGF("libUE4.so base: 0x%lX", Base);
+
+        LOGF("Waiting for UE4 Frontend to fully initialize...");
+
+        std::string LastWorld;
+        int WorldStableSeconds = 0;
+        int GObjectsStableSeconds = 0;
+        int LastGObjectsValid = -1;
+        bool Ready = false;
+
+        for (int Attempt = 1; Attempt <= 3600; ++Attempt)
+        {
+            void* WorldPtr = *(void**)(Base + 0x10191070);
+            if (!WorldPtr)
+            {
+                WorldStableSeconds = 0;
+                GObjectsStableSeconds = 0;
+                if (Attempt % 30 == 0)
+                    LOGF("[%d] GWorld null (UE4 not started yet)", Attempt);
+                sleep(1);
+                continue;
+            }
+
+            std::string World = GetWorldName(Base);
+            if (World.empty())
+            {
+                if (Attempt % 30 == 0)
+                    LOGF("[%d] GWorld=%p but name unresolved", Attempt, WorldPtr);
+                WorldStableSeconds = 0;
+                sleep(1);
+                continue;
+            }
+
+            if (World != LastWorld)
+            {
+                LOGF("[%d] World: '%s' (prev: '%s')", Attempt, World.c_str(),
+                     LastWorld.empty() ? "<none>" : LastWorld.c_str());
+                LastWorld = World;
+                WorldStableSeconds = 0;
+            }
+            else
+            {
+                ++WorldStableSeconds;
+            }
+
+            int ValidObjs = CountNonZeroObjects(Base, 100);
+            if (ValidObjs >= 0)
+            {
+                if (ValidObjs == LastGObjectsValid)
+                    ++GObjectsStableSeconds;
+                else
+                {
+                    GObjectsStableSeconds = 0;
+                    LastGObjectsValid = ValidObjs;
+                }
+                if (Attempt % 15 == 0)
+                    LOGF("[%d] World='%s' (stable %ds), GObjects=%d/100 valid (stable %ds)",
+                         Attempt, World.c_str(), WorldStableSeconds, ValidObjs, GObjectsStableSeconds);
+            }
+
+            bool IsMenu = (World.find("Frontend") != std::string::npos) ||
+                          (World.find("FrontEnd") != std::string::npos);
+            bool IsGame = (World.find("_Terrain") != std::string::npos) ||
+                          (World.find("Creative") != std::string::npos);
+
+            int RequiredWorldStable = (IsMenu || IsGame) ? 20 : 40;
+            int RequiredGObjectsStable = 15;
+
+            if (WorldStableSeconds >= RequiredWorldStable &&
+                GObjectsStableSeconds >= RequiredGObjectsStable &&
+                ValidObjs >= 90)
+            {
+                LOGF("Ready to dump: World='%s' stable %ds, GObjects stable %ds (%d/100)",
+                     World.c_str(), WorldStableSeconds, GObjectsStableSeconds, ValidObjs);
+                Ready = true;
+                break;
+            }
+
+            if (Attempt == 3600)
+            {
+                LOGF("Timeout: World='%s' stable %ds, GObjects=%d/100 — dumping anyway",
+                     World.c_str(), WorldStableSeconds, ValidObjs);
+                Ready = true;
+            }
+
+            sleep(1);
+        }
+
+        if (!Ready)
+            return;
+
+        LOGF("Waiting 10 extra seconds for final safety margin...");
+        sleep(10);
+
+        std::string FinalWorld = GetWorldName(Base);
+        int FinalValid = CountNonZeroObjects(Base, 100);
+        LOGF("Final check: World='%s', GObjects=%d/100", FinalWorld.c_str(), FinalValid);
+
+        if (FinalValid < 80)
+        {
+            LOGF("WARNING: GObjects only %d/100 — dump may fail validation", FinalValid);
+        }
+
         const std::string GamePackage = GetCurrentPackage();
         if (GamePackage.empty() || GamePackage.find('.') == std::string::npos)
         {
             LOGF("Failed to detect current package from /proc/self/cmdline");
             return;
         }
-        bool bSupported = false;
-        for (const auto& Profile : GetUECustomProfiles())
-        {
-            for (const auto& Identifier : Profile->GetSupportedGames())
-            {
-                if (Identifier == GamePackage) { bSupported = true; break; }
-            }
-            if (bSupported) break;
-        }
-        if (!bSupported)
-        {
-            LOGF("Package \"%s\" is not supported by any registered profile", GamePackage.c_str());
-            return;
-        }
+        LOGF("Starting dump for '%s' from world '%s'", GamePackage.c_str(), FinalWorld.c_str());
         RunDump(getpid(), GamePackage, EK_MEM_OP_SYSCALL, nullptr, true, false);
     }).detach();
 }
