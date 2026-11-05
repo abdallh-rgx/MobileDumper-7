@@ -1002,7 +1002,7 @@ bool FInGenOffsets::Init_UStruct_Children()
 
 	GLogger.FmtWrite(ELogLevel::Info, "Init_UStruct_Children: FField system = {}\n",
 	                 bHasFField ? "yes (UE 4.25+)" : "no (legacy UProperty)");
-
+	
 	std::vector<std::pair<void*, void*>> Infos;
 
 	if (!bHasFField)
