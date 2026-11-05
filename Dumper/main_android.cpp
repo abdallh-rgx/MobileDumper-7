@@ -51,26 +51,43 @@
 #include "Profile/CustomProfiles/Shared/DeltaForce.h"
 #include "Profile/CustomProfiles/Shared/Fortnite.h"
 
-// ============================================================
-// Log file
-// ============================================================
 #define LOG_TAG "MobileDumper-7"
 
 static FILE*      g_LogFile = nullptr;
 static std::mutex g_LogMutex;
 
+static std::string GetCurrentPackage()
+{
+    char Buf[512] = {};
+    FILE* F = fopen("/proc/self/cmdline", "r");
+    if (F)
+    {
+        size_t N = fread(Buf, 1, sizeof(Buf) - 1, F);
+        fclose(F);
+        Buf[N] = '\0';
+    }
+    std::string Result(Buf);
+    auto Slash = Result.find('/');
+    if (Slash != std::string::npos)
+        Result = Result.substr(Slash + 1);
+    return Result;
+}
+
 static void InitLogFile()
 {
-    const char* Paths[] = {
-        "/storage/emulated/0/Android/data/com.epicgames.fortnite/files/MobileDumper7.log",
-        "/sdcard/Android/data/com.epicgames.fortnite/files/MobileDumper7.log",
-        "/data/data/com.epicgames.fortnite/files/MobileDumper7.log",
-        "/data/local/tmp/MobileDumper7.log",
-    };
-
-    for (const char* P : Paths)
+    std::vector<std::string> Paths;
+    const std::string Pkg = GetCurrentPackage();
+    if (!Pkg.empty() && Pkg.find('.') != std::string::npos)
     {
-        FILE* F = fopen(P, "w");
+        Paths.push_back("/storage/emulated/0/Android/data/" + Pkg + "/files/MobileDumper7.log");
+        Paths.push_back("/sdcard/Android/data/" + Pkg + "/files/MobileDumper7.log");
+        Paths.push_back("/data/data/" + Pkg + "/files/MobileDumper7.log");
+    }
+    Paths.push_back("/data/local/tmp/MobileDumper7.log");
+
+    for (const auto& P : Paths)
+    {
+        FILE* F = fopen(P.c_str(), "w");
         if (F)
         {
             g_LogFile = F;
@@ -108,9 +125,6 @@ static void CloseLogFile()
     }
 }
 
-// ============================================================
-// Profiles
-// ============================================================
 inline std::vector<std::shared_ptr<IProfile>> UECustomProfiles;
 
 std::vector<std::shared_ptr<IProfile>>& GetUECustomProfiles()
@@ -176,7 +190,10 @@ bool RunDump(int GamePid, const std::string& GamePackage, EKittyMemOP MemOp = EK
 
     auto StartTime = std::chrono::high_resolution_clock::now();
 
-    GSettings.Generator.SDKGenerationPath = "/storage/emulated/0/Android/data/com.epicgames.fortnite/files/SDK";
+    if (OutputDir && *OutputDir)
+        GSettings.Generator.SDKGenerationPath = OutputDir;
+    else
+        GSettings.Generator.SDKGenerationPath = "/storage/emulated/0/Android/data/" + GamePackage + "/files/SDK";
 
     std::error_code Ec;
     std::filesystem::create_directories(GSettings.Generator.SDKGenerationPath, Ec);
@@ -311,7 +328,27 @@ __attribute__((constructor)) static void OnLibraryLoad()
     std::thread([]()
     {
         sleep(60);
-        RunDump(getpid(), "com.epicgames.fortnite", EK_MEM_OP_SYSCALL, nullptr, true, false);
+        const std::string GamePackage = GetCurrentPackage();
+        if (GamePackage.empty() || GamePackage.find('.') == std::string::npos)
+        {
+            LOGF("Failed to detect current package from /proc/self/cmdline");
+            return;
+        }
+        bool bSupported = false;
+        for (const auto& Profile : GetUECustomProfiles())
+        {
+            for (const auto& Identifier : Profile->GetSupportedGames())
+            {
+                if (Identifier == GamePackage) { bSupported = true; break; }
+            }
+            if (bSupported) break;
+        }
+        if (!bSupported)
+        {
+            LOGF("Package \"%s\" is not supported by any registered profile", GamePackage.c_str());
+            return;
+        }
+        RunDump(getpid(), GamePackage, EK_MEM_OP_SYSCALL, nullptr, true, false);
     }).detach();
 }
 
