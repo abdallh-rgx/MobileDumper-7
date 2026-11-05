@@ -990,7 +990,44 @@ bool FInGenOffsets::Init_UStruct_Children()
 
 	std::vector<std::pair<void*, void*>> Infos;
 
-	if (ObjectArray::FindObject("ObjectProperty Engine.Controller.TransformComponent", EClassCastFlags::ObjectProperty))
+	bool FInGenOffsets::Init_UStruct_Children()
+{
+	this->UStruct.Children = OffsetFinder::OffsetNotFound;
+
+	const bool bHasFField =
+	    ObjectArray::FindObjectFast("Field") != nullptr ||
+	    ObjectArray::FindObjectFast("FField") != nullptr;
+
+	InternalSettings::bUseFProperty = bHasFField;
+
+	GLogger.FmtWrite(ELogLevel::Info, "Init_UStruct_Children: FField system = {}\n",
+	                 bHasFField ? "yes (UE 4.25+)" : "no (legacy UProperty)");
+
+	std::vector<std::pair<void*, void*>> Infos;
+
+	if (!bHasFField)
+	{
+		Infos.push_back({ObjectArray::FindObjectFast("Vector").GetAddress(), ObjectArray::FindObjectFastInOuter("X", "Vector").GetAddress()});
+		Infos.push_back({ObjectArray::FindObjectFast("Vector4").GetAddress(), ObjectArray::FindObjectFastInOuter("X", "Vector4").GetAddress()});
+		Infos.push_back({ObjectArray::FindObjectFast("Vector2D").GetAddress(), ObjectArray::FindObjectFastInOuter("X", "Vector2D").GetAddress()});
+		Infos.push_back({ObjectArray::FindObjectFast("Guid").GetAddress(), ObjectArray::FindObjectFastInOuter("A", "Guid").GetAddress()});
+
+		this->UStruct.Children = OffsetFinder::FindOffset(Infos, 0x14);
+		if (this->UStruct.Children != OffsetFinder::OffsetNotFound)
+		{
+			GLogger.FmtWrite(ELogLevel::Info, "Init_UStruct_Children: legacy UProperty chain at 0x{:X}\n",
+			                 (uint32_t)this->UStruct.Children);
+			return true;
+		}
+	}
+
+	Infos.clear();
+	Infos.push_back({ObjectArray::FindObjectFast("PlayerController").GetAddress(), ObjectArray::FindObjectFastInOuter("WasInputKeyJustReleased", "PlayerController").GetAddress()});
+	Infos.push_back({ObjectArray::FindObjectFast("Controller").GetAddress(), ObjectArray::FindObjectFastInOuter("UnPossess", "Controller").GetAddress()});
+
+	this->UStruct.Children = OffsetFinder::FindOffset(Infos);
+	return this->UStruct.Children != OffsetFinder::OffsetNotFound;
+}
 	{
 		Infos.push_back({ObjectArray::FindObjectFast("Vector").GetAddress(), ObjectArray::FindObjectFastInOuter("X", "Vector").GetAddress()});
 		Infos.push_back({ObjectArray::FindObjectFast("Vector4").GetAddress(), ObjectArray::FindObjectFastInOuter("X", "Vector4").GetAddress()});
