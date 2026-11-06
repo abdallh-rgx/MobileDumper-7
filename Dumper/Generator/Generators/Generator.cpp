@@ -49,19 +49,6 @@ static void InstallPoolGuards()
 	sigaction(SIGILL,  &sa, nullptr);
 }
 
-static bool SafeGetString(int32_t idx, std::string& Out)
-{
-	if (sigsetjmp(g_PoolSafeJmp, 1) == 0) {
-		g_PoolCanJump = 1;
-		Out = NameArray::GetNameEntry(idx).GetString();
-		g_PoolCanJump = 0;
-		return true;
-	}
-	g_PoolCanJump = 0;
-	Out.clear();
-	return false;
-}
-
 bool Generator::InitUnrealModule(std::string& OutErrorString)
 {
 	int Retries       = 5;
@@ -1031,48 +1018,49 @@ void Generator::GenerateNameIndexHeader()
 
 		for (int32 i = 0; i < PoolScanLimit; i++)
 		{
-			uintptr_t EntryAddr = 0;
-			try
-			{
-				EntryAddr = GProfile->GetNameEntryByIndex(GNames, GLayouts.NamesLayout, i);
-			}
-			catch (...) { EntryAddr = 0; }
-
-			if (EntryAddr == 0)
-			{
-				EmptyStreak++;
-				if (EmptyStreak > 500) break;
-				continue;
-			}
-
-			if (!GMemory->IsAddressReadable(EntryAddr, 8))
-			{
-				EmptyStreak++;
-				if (EmptyStreak > 500) break;
-				continue;
-			}
-
-			const uint16 Hdr = GMemory->Read<uint16>(EntryAddr);
-			const int32  Len = static_cast<int32>(Hdr >> LenShift);
-
-			if (Len == 0 || Len > 200)
-			{
-				PoolSkipped++;
-				EmptyStreak++;
-				if (EmptyStreak > 500) break;
-				continue;
-			}
+			if (i % 100 == 0)
+				GLogger.FmtWrite(ELogLevel::Info, "GNIH: pool i={}/{}\n", i, PoolScanLimit);
 
 			std::string NameStr;
-			if (!SafeGetString(i, NameStr))
+			bool bSkipped = false;
+
+			if (sigsetjmp(g_PoolSafeJmp, 1) != 0)
 			{
+				g_PoolCanJump = 0;
 				PoolCrashed++;
 				EmptyStreak++;
 				if (EmptyStreak > 500) break;
 				continue;
 			}
 
-			if (NameStr.empty() || NameStr.size() > 200)
+			g_PoolCanJump = 1;
+
+			{
+				uintptr_t EntryAddr = GProfile->GetNameEntryByIndex(GNames, GLayouts.NamesLayout, i);
+				if (EntryAddr == 0 || !GMemory->IsAddressReadable(EntryAddr, 8))
+				{
+					bSkipped = true;
+				}
+				else
+				{
+					const uint16 Hdr = GMemory->Read<uint16>(EntryAddr);
+					const int32 Len = static_cast<int32>(Hdr >> LenShift);
+					if (Len == 0 || Len > 200)
+					{
+						bSkipped = true;
+					}
+					else
+					{
+						NameStr = NameArray::GetNameEntry(i).GetString();
+						if (NameStr.empty() || NameStr.size() > 200)
+							bSkipped = true;
+					}
+				}
+			}
+
+			g_PoolCanJump = 0;
+
+			if (bSkipped)
 			{
 				PoolSkipped++;
 				EmptyStreak++;
