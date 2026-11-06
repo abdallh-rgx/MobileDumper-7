@@ -1003,88 +1003,7 @@ void Generator::GenerateNameIndexHeader()
 
 		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 3-objects done, {} unique\n", (int)NameToIdx.size());
 
-		constexpr int32 PoolScanLimit = 3000;
-		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 4-pool scan 0..{}\n", PoolScanLimit);
-
-		InstallPoolGuards();
-
-		const int32 LenShift = InternalSettings::bUseOutlineNumberName ? 6 : 1;
-		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 4a-LenShift={}\n", LenShift);
-
-		int32 PoolAdded   = 0;
-		int32 PoolSkipped = 0;
-		int32 PoolCrashed = 0;
-		int32 EmptyStreak = 0;
-
-		for (int32 i = 0; i < PoolScanLimit; i++)
-		{
-			if (i % 100 == 0)
-				GLogger.FmtWrite(ELogLevel::Info, "GNIH: pool i={}/{}\n", i, PoolScanLimit);
-
-			std::string NameStr;
-			bool bSkipped = false;
-
-			if (sigsetjmp(g_PoolSafeJmp, 1) != 0)
-			{
-				g_PoolCanJump = 0;
-				PoolCrashed++;
-				EmptyStreak++;
-				if (EmptyStreak > 500) break;
-				continue;
-			}
-
-			g_PoolCanJump = 1;
-
-			{
-				uintptr_t EntryAddr = GProfile->GetNameEntryByIndex(GNames, GLayouts.NamesLayout, i);
-				if (EntryAddr == 0 || !GMemory->IsAddressReadable(EntryAddr, 8))
-				{
-					bSkipped = true;
-				}
-				else
-				{
-					const uint16 Hdr = GMemory->Read<uint16>(EntryAddr);
-					const int32 Len = static_cast<int32>(Hdr >> LenShift);
-					if (Len == 0 || Len > 200)
-					{
-						bSkipped = true;
-					}
-					else
-					{
-						NameStr = NameArray::GetNameEntry(i).GetString();
-						if (NameStr.empty() || NameStr.size() > 200)
-							bSkipped = true;
-					}
-				}
-			}
-
-			g_PoolCanJump = 0;
-
-			if (bSkipped)
-			{
-				PoolSkipped++;
-				EmptyStreak++;
-				if (EmptyStreak > 500) break;
-				continue;
-			}
-
-			EmptyStreak = 0;
-
-			auto it = NameToIdx.find(NameStr);
-			if (it == NameToIdx.end())
-			{
-				NameToIdx.emplace(std::move(NameStr), i);
-				PoolAdded++;
-			}
-			else if (i < it->second)
-			{
-				it->second = i;
-			}
-		}
-
-		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 5-pool done, +{} new, {} skipped, {} crashed\n",
-		                 PoolAdded, PoolSkipped, PoolCrashed);
-		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 6-total {}\n", (int)NameToIdx.size());
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 4-pool scan SKIPPED (12.41 crash guard)\n");
 
 		std::vector<std::pair<int32_t, std::string>> Data;
 		Data.reserve(NameToIdx.size());
@@ -1094,7 +1013,7 @@ void Generator::GenerateNameIndexHeader()
 		NameToIdx.clear();
 		NameToIdx.rehash(0);
 
-		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 7-sorting by name\n");
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 5-sorting by name\n");
 		std::sort(Data.begin(), Data.end(),
 			[](const auto& A, const auto& B)
 			{
@@ -1102,7 +1021,7 @@ void Generator::GenerateNameIndexHeader()
 				return A.first < B.first;
 			});
 
-		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 8-opening output\n");
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 6-opening output\n");
 		const std::string Path = (DumperFolder / "NameIndices.h").string();
 		std::ofstream Out(Path, std::ios::binary);
 		if (!Out.is_open())
@@ -1118,7 +1037,7 @@ void Generator::GenerateNameIndexHeader()
 		Out << "#include <string>\n\n";
 		Out << "namespace FNameIndices\n{\n\n";
 
-		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 9-writing kTable\n");
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 7-writing kTable\n");
 		Out << "struct Entry { const char* Name; int32_t Index; };\n\n";
 		Out << "inline const Entry kTable[] = {\n";
 		for (auto& e : Data)
@@ -1173,7 +1092,7 @@ void Generator::GenerateNameIndexHeader()
 				return A.second < B.second;
 			});
 
-		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 10-writing kIndexToName\n");
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 8-writing kIndexToName\n");
 		Out << "struct IndexEntry { int32_t Idx; const char* Name; };\n\n";
 		Out << "inline const IndexEntry kIndexToName[] = {\n";
 		for (auto& e : Data)
@@ -1199,7 +1118,7 @@ void Generator::GenerateNameIndexHeader()
 
 		Out.close();
 
-		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 11-done, {} names\n", (int)Data.size());
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 9-done, {} names\n", (int)Data.size());
 	}
 	catch (const std::exception& E)
 	{
