@@ -1354,37 +1354,80 @@ bool FInGenOffsets::Init_Property_ElementSize()
 {
 	this->Property.ElementSize = OffsetFinder::OffsetNotFound;
 
-	auto FindInstance = [](const char* ClassName) -> void* {
-		UEClass cls = ObjectArray::FindClassFast(ClassName);
-		if (!cls) return nullptr;
-		void* clsAddr = cls.GetAddress();
+	auto FindClassByName = [](const char* name) -> void* {
 		for (int i = 0; i < ObjectArray::Num(); i++) {
 			UEObject obj = ObjectArray::GetByIndex(i);
 			if (!obj.GetAddress()) continue;
-			if (obj.GetClass().GetAddress() == clsAddr) return obj.GetAddress();
+			if (obj.GetName() != name) continue;
+			if (obj.GetClass().GetAddress() != obj.GetAddress()) continue;
+			return obj.GetAddress();
 		}
 		return nullptr;
 	};
 
-	void* intP  = FindInstance("IntProperty");
-	void* boolP = FindInstance("BoolProperty");
-	void* objP  = FindInstance("ObjectProperty");
+	auto CollectInstances = [](void* clsAddr, int maxCount) -> std::vector<void*> {
+		std::vector<void*> result;
+		for (int i = 0; i < ObjectArray::Num() && (int)result.size() < maxCount; i++) {
+			UEObject obj = ObjectArray::GetByIndex(i);
+			if (!obj.GetAddress()) continue;
+			if (obj.GetClass().GetAddress() != clsAddr) continue;
+			if (obj.GetAddress() == clsAddr) continue;
+			std::string n = obj.GetName();
+			if (n.starts_with("Default__")) continue;
+			result.push_back(obj.GetAddress());
+		}
+		return result;
+	};
 
-	if (!intP || !boolP || !objP) {
-		GLogger.FmtWrite(ELogLevel::Error, "Property.ElementSize: probe instances not found\n");
+	void* intCls  = FindClassByName("IntProperty");
+	void* boolCls = FindClassByName("BoolProperty");
+	void* objCls  = FindClassByName("ObjectProperty");
+
+	GLogger.FmtWrite(ELogLevel::Info, "ElementSize: classes int={} bool={} obj={}\n",
+	                 (void*)intCls, (void*)boolCls, (void*)objCls);
+
+	if (!intCls || !boolCls || !objCls) {
+		GLogger.FmtWrite(ELogLevel::Error, "ElementSize: class lookup failed\n");
 		return false;
 	}
 
-	for (int off = 0x20; off <= 0x60; off += 4) {
-		int32_t vInt  = GMemory->Read<int32_t>(uintptr_t(intP)  + off);
-		int32_t vBool = GMemory->Read<int32_t>(uintptr_t(boolP) + off);
-		int32_t vObj  = GMemory->Read<int32_t>(uintptr_t(objP)  + off);
-		if (vInt == 4 && vBool == 1 && vObj == 8) {
-			this->Property.ElementSize = off;
-			GLogger.FmtWrite(ELogLevel::Info, "Property.ElementSize = 0x{:X}\n", off);
-			return true;
-		}
+	auto intInst  = CollectInstances(intCls,  5);
+	auto boolInst = CollectInstances(boolCls, 5);
+	auto objInst  = CollectInstances(objCls,  5);
+
+	GLogger.FmtWrite(ELogLevel::Info, "ElementSize: instances int={} bool={} obj={}\n",
+	                 (int)intInst.size(), (int)boolInst.size(), (int)objInst.size());
+
+	if (intInst.empty() || boolInst.empty() || objInst.empty()) {
+		GLogger.FmtWrite(ELogLevel::Error, "ElementSize: no instances found\n");
+		return false;
 	}
+
+	int bestOff = -1;
+	int bestScore = 0;
+
+	for (int off = 0x20; off <= 0x60; off += 4) {
+		int score = 0;
+		for (void* p : intInst)
+			if (GMemory->Read<int32_t>(uintptr_t(p) + off) == 4) score++;
+		for (void* p : boolInst)
+			if (GMemory->Read<int32_t>(uintptr_t(p) + off) == 1) score++;
+		for (void* p : objInst)
+			if (GMemory->Read<int32_t>(uintptr_t(p) + off) == 8) score++;
+		if (score > bestScore) { bestScore = score; bestOff = off; }
+	}
+
+	int maxScore = (int)(intInst.size() + boolInst.size() + objInst.size());
+	GLogger.FmtWrite(ELogLevel::Info, "ElementSize: best=0x{:X} score={}/{}\n",
+	                 bestOff, bestScore, maxScore);
+
+	if (bestOff > 0 && bestScore * 10 >= maxScore * 8) {
+		this->Property.ElementSize = bestOff;
+		GLogger.FmtWrite(ELogLevel::Info, "Property.ElementSize = 0x{:X}\n", bestOff);
+		return true;
+	}
+
+	GLogger.FmtWrite(ELogLevel::Error, "Property.ElementSize: no strong match\n");
 	return false;
 }
 
