@@ -1858,14 +1858,46 @@ void FInSDKOffsets::InitDatatableRowMapOffset()
 
 void FInSDKOffsets::InitUEngineAndUWorld()
 {
-	std::unordered_map<std::string, uintptr_t> Offsets = {
-	    {"Engine", 0},
-	    {"World", 0},
-	};
-	OffsetFinder::FindStaticOffsets(Offsets);
+    std::unordered_map<std::string, uintptr_t> Offsets = {
+        {"Engine", 0},
+        {"World",  0},
+    };
+    OffsetFinder::FindStaticOffsets(Offsets);
 
-	this->Statics.GEngine = static_cast<int64>(Offsets["Engine"]);
-	this->Statics.GWorld  = static_cast<int64>(Offsets["World"]);
+    this->Statics.GEngine = static_cast<int64>(Offsets["Engine"]);
+    this->Statics.GWorld  = static_cast<int64>(Offsets["World"]);
+
+    if (this->Statics.GEngine != 0)
+    {
+        uintptr_t EngineAddr = GMemory->GetUnrealModule().OffsetToAddress(this->Statics.GEngine);
+        uintptr_t Engine = GMemory->Read<uintptr_t>(EngineAddr);
+
+        if (Engine && GMemory->IsAddressReadable(Engine, 0x800))
+        {
+            UEClass EngineClass = ObjectArray::FindClassFast("Engine");
+            if (EngineClass)
+            {
+                UEProperty EngineVersionProp = EngineClass.FindMember("EngineVersion");
+                if (EngineVersionProp)
+                {
+                    const int32 Off = EngineVersionProp.GetOffset();
+                    const uint16 Major = GMemory->Read<uint16>(Engine + Off + 0);
+                    const uint16 Minor = GMemory->Read<uint16>(Engine + Off + 2);
+                    const uint16 Patch = GMemory->Read<uint16>(Engine + Off + 4);
+                    const uint32 Cl    = GMemory->Read<uint32>(Engine + Off + 8);
+
+                    GLogger.FmtWrite(ELogLevel::Info,
+                        "[EngineVersion] Detected: {}.{}.{} CL:{} (offset +0x{:X})\n",
+                        Major, Minor, Patch, Cl, Off);
+                }
+                else
+                {
+                    GLogger.FmtWrite(ELogLevel::Warning,
+                        "[EngineVersion] 'EngineVersion' property not found on UEngine\n");
+                }
+            }
+        }
+    }
 }
 
 void FInSDKOffsets::InitFText()
