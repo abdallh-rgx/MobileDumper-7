@@ -1570,7 +1570,7 @@ bool FInGenOffsets::Init_Property_OffsetInternal()
 		return nullptr;
 	};
 
-	auto TryGroup = [&FindPropAddr](std::initializer_list<std::pair<const char*, std::pair<const char*, int32_t>>> Members) -> bool
+	auto TryGroup = [this, &FindPropAddr](std::initializer_list<std::pair<const char*, std::pair<const char*, int32_t>>> Members) -> bool
 	{
 		std::vector<std::pair<void*, int32_t>> Infos;
 		for (auto& [SN, MV] : Members)
