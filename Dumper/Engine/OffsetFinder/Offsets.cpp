@@ -1352,254 +1352,195 @@ bool FInGenOffsets::Init_UClass_InitImplementedInterfaces()
 
 bool FInGenOffsets::Init_Property_ElementSize()
 {
-	this->Property.ElementSize = OffsetFinder::OffsetNotFound;
+    this->Property.ElementSize = OffsetFinder::OffsetNotFound;
 
-	auto FindPropAddr = [](const char* StructName, const char* MemberName) -> void*
-	{
-		void* a = ObjectArray::FindObjectFastInOuter(MemberName, StructName).GetAddress();
-		if (a) return a;
-		if (UEStruct S = ObjectArray::FindStructFast(StructName))
-			return S.FindMember(MemberName).GetAddress();
-		return nullptr;
-	};
+    struct Probe { const char* ClassName; int32_t ExpectedSize; };
+    static const Probe probes[] = {
+        {"ObjectProperty",    8},
+        {"ClassProperty",     8},
+        {"InterfaceProperty", 8},
+        {"IntProperty",       4},
+        {"FloatProperty",     4},
+        {"ByteProperty",      1},
+        {"BoolProperty",      1},
+    };
 
-	std::vector<std::pair<void*, int32_t>> Infos;
+    std::vector<std::pair<void*, int32_t>> Infos;
 
-	auto TryAdd = [&Infos, &FindPropAddr](const char* SN, const char* MN, int32_t Size)
-	{
-		if (void* p = FindPropAddr(SN, MN)) Infos.push_back({p, Size});
-	};
+    for (auto& probe : probes)
+    {
+        void* clsObj = ObjectArray::FindObjectFast(probe.ClassName).GetAddress();
+        if (!clsObj) continue;
 
-	TryAdd("Vector", "X", 4);
-	TryAdd("Vector", "Y", 4);
-	TryAdd("Vector", "Z", 4);
+        for (int i = 0; i < ObjectArray::Num(); i++)
+        {
+            UEObject obj = ObjectArray::GetByIndex(i);
+            if (!obj.GetAddress()) continue;
+            if (obj.GetClass().GetAddress() != clsObj) continue;
+            Infos.push_back({obj.GetAddress(), probe.ExpectedSize});
+            break;
+        }
+    }
 
-	TryAdd("Color", "R", 1);
-	TryAdd("Color", "G", 1);
-	TryAdd("Color", "B", 1);
+    GLogger.FmtWrite(ELogLevel::Info, "Property.ElementSize: %zu class probes\n", Infos.size());
 
-	TryAdd("Rotator", "Pitch", 4);
-	TryAdd("Rotator", "Yaw", 4);
-	TryAdd("Rotator", "Roll", 4);
+    if (Infos.size() < 2) return false;
 
-	TryAdd("IntPoint", "X", 4);
-	TryAdd("IntPoint", "Y", 4);
-
-	TryAdd("IntVector", "X", 4);
-	TryAdd("IntVector", "Y", 4);
-	TryAdd("IntVector", "Z", 4);
-
-	TryAdd("Vector2D", "X", 4);
-	TryAdd("Vector2D", "Y", 4);
-
-	TryAdd("Guid", "A", 4);
-	TryAdd("Guid", "B", 4);
-
-	if (Infos.empty())
-	{
-		GLogger.FmtWrite(ELogLevel::Error, "Property.ElementSize: no members found\n");
-		return false;
-	}
-
-	int32 r = OffsetFinder::FindOffset(Infos, 0x20, 0x80);
-	if (r != OffsetFinder::OffsetNotFound)
-	{
-		this->Property.ElementSize = r;
-		GLogger.FmtWrite(ELogLevel::Info, "Property.ElementSize = 0x{:X} (from {} members)\n", r, (int)Infos.size());
-		return true;
-	}
-
-	std::vector<std::pair<void*, int32_t>> Size4, Size1;
-	for (auto& p : Infos)
-	{
-		if (p.second == 4) Size4.push_back(p);
-		else if (p.second == 1) Size1.push_back(p);
-	}
-
-	if (Size4.size() >= 2)
-	{
-		r = OffsetFinder::FindOffset(Size4, 0x20, 0x80);
-		if (r != OffsetFinder::OffsetNotFound)
-		{
-			this->Property.ElementSize = r;
-			GLogger.FmtWrite(ELogLevel::Info, "Property.ElementSize = 0x{:X} (size4)\n", r);
-			return true;
-		}
-	}
-	if (Size1.size() >= 2)
-	{
-		r = OffsetFinder::FindOffset(Size1, 0x20, 0x80);
-		if (r != OffsetFinder::OffsetNotFound)
-		{
-			this->Property.ElementSize = r;
-			GLogger.FmtWrite(ELogLevel::Info, "Property.ElementSize = 0x{:X} (size1)\n", r);
-			return true;
-		}
-	}
-
-	return false;
+    int32 r = OffsetFinder::FindOffset(Infos, 0x20, 0x80);
+    if (r != OffsetFinder::OffsetNotFound)
+    {
+        this->Property.ElementSize = r;
+        GLogger.FmtWrite(ELogLevel::Info, "Property.ElementSize = 0x{:X}\n", r);
+        return true;
+    }
+    return false;
 }
 
 bool FInGenOffsets::Init_Property_ArrayDim()
 {
-	this->Property.ArrayDim = OffsetFinder::OffsetNotFound;
+    this->Property.ArrayDim = OffsetFinder::OffsetNotFound;
 
-	if (this->Property.ElementSize == OffsetFinder::OffsetNotFound)
-	{
-		GLogger.FmtWrite(ELogLevel::Error, "Init_Property_ArrayDim: ElementSize not set.\n");
-		return false;
-	}
+    if (this->Property.ElementSize == OffsetFinder::OffsetNotFound)
+    {
+        GLogger.FmtWrite(ELogLevel::Error, "Init_Property_ArrayDim: ElementSize not set.\n");
+        return false;
+    }
 
-	const int32_t MinOffset = this->UField.Next + int32_t(sizeof(void*));
-	const int32_t MaxOffset = this->Property.ElementSize + 0x10;
+    const int32 MinOff = this->UField.Next + int32(sizeof(void*));
+    const int32 MaxOff = this->Property.ElementSize + 0x10;
 
-	auto FindPropAddr = [](const char* StructName, const char* MemberName) -> void*
-	{
-		void* a = ObjectArray::FindObjectFastInOuter(MemberName, StructName).GetAddress();
-		if (a) return a;
-		if (UEStruct S = ObjectArray::FindStructFast(StructName))
-			return S.FindMember(MemberName).GetAddress();
-		return nullptr;
-	};
+    struct Probe { const char* ClassName; };
+    static const Probe probes[] = {
+        {"ObjectProperty"}, {"ClassProperty"}, {"InterfaceProperty"},
+        {"IntProperty"}, {"FloatProperty"}, {"ByteProperty"}, {"BoolProperty"},
+    };
 
-	std::vector<std::pair<void*, int32_t>> Infos;
+    std::vector<std::pair<void*, int32_t>> Infos;
+    for (auto& probe : probes)
+    {
+        void* clsObj = ObjectArray::FindObjectFast(probe.ClassName).GetAddress();
+        if (!clsObj) continue;
+        for (int i = 0; i < ObjectArray::Num(); i++)
+        {
+            UEObject obj = ObjectArray::GetByIndex(i);
+            if (!obj.GetAddress()) continue;
+            if (obj.GetClass().GetAddress() != clsObj) continue;
+            Infos.push_back({obj.GetAddress(), 1});
+            break;
+        }
+    }
 
-	auto TryAdd = [&Infos, &FindPropAddr](const char* SN, const char* MN)
-	{
-		if (void* p = FindPropAddr(SN, MN)) Infos.push_back({p, 1});
-	};
+    if (Infos.size() < 2) return false;
 
-	TryAdd("Vector", "X");
-	TryAdd("Vector", "Y");
-	TryAdd("Vector", "Z");
-
-	TryAdd("Color", "R");
-	TryAdd("Color", "G");
-
-	TryAdd("Rotator", "Pitch");
-	TryAdd("Rotator", "Yaw");
-
-	TryAdd("IntPoint", "X");
-	TryAdd("IntPoint", "Y");
-
-	TryAdd("IntVector", "X");
-	TryAdd("IntVector", "Y");
-
-	if (Infos.size() < 2)
-	{
-		GLogger.FmtWrite(ELogLevel::Error, "Property.ArrayDim: insufficient members\n");
-		return false;
-	}
-
-	int32 r = OffsetFinder::FindOffset(Infos, MinOffset, MaxOffset);
-	if (r != OffsetFinder::OffsetNotFound)
-	{
-		this->Property.ArrayDim = r;
-		GLogger.FmtWrite(ELogLevel::Info, "Property.ArrayDim = 0x{:X}\n", r);
-		return true;
-	}
-
-	return false;
+    int32 r = OffsetFinder::FindOffset(Infos, MinOff, MaxOff);
+    if (r != OffsetFinder::OffsetNotFound)
+    {
+        this->Property.ArrayDim = r;
+        GLogger.FmtWrite(ELogLevel::Info, "Property.ArrayDim = 0x{:X}\n", r);
+        return true;
+    }
+    return false;
 }
 
 bool FInGenOffsets::Init_Property_PropertyFlags()
 {
-	this->Property.PropertyFlags = OffsetFinder::OffsetNotFound;
+    this->Property.PropertyFlags = OffsetFinder::OffsetNotFound;
 
-	auto FindPropAddr = [](const char* StructName, const char* MemberName) -> void*
-	{
-		void* a = ObjectArray::FindObjectFastInOuter(MemberName, StructName).GetAddress();
-		if (a) return a;
-		if (UEStruct S = ObjectArray::FindStructFast(StructName))
-			return S.FindMember(MemberName).GetAddress();
-		return nullptr;
-	};
+    auto FindClassInstance = [this](const char* ClassName) -> void*
+    {
+        void* clsObj = ObjectArray::FindObjectFast(ClassName).GetAddress();
+        if (!clsObj) return nullptr;
+        for (int i = 0; i < ObjectArray::Num(); i++)
+        {
+            UEObject obj = ObjectArray::GetByIndex(i);
+            if (!obj.GetAddress()) continue;
+            if (obj.GetClass().GetAddress() != clsObj) continue;
+            return obj.GetAddress();
+        }
+        return nullptr;
+    };
 
-	constexpr EPropertyFlags Common =
-	    EPropertyFlags::Edit | EPropertyFlags::ZeroConstructor |
-	    EPropertyFlags::SaveGame | EPropertyFlags::IsPlainOldData |
-	    EPropertyFlags::HasGetValueTypeHash;
+    void* intProp  = FindClassInstance("IntProperty");
+    void* boolProp = FindClassInstance("BoolProperty");
+    if (!intProp || !boolProp) return false;
 
-	constexpr std::array<EPropertyFlags, 4> Variants = {
-	    EPropertyFlags::NoDestructor,
-	    EPropertyFlags::NoDestructor | EPropertyFlags::NativeAccessSpecifierPublic,
-	    EPropertyFlags::None,
-	    EPropertyFlags::NativeAccessSpecifierPublic};
+    // UIntProperty standard flags (from UE4.23 source):
+    //   CPF_Edit | CPF_ZeroConstructor | CPF_SaveGame | CPF_IsPlainOldData | CPF_HasGetValueTypeHash
+    //   possibly + NativeAccessSpecifierPublic / NoDestructor depending on where the property is
+    // UBoolProperty same flags but different Flag values per property
 
-	void* IntLikeProp = FindPropAddr("Vector", "X");
-	if (!IntLikeProp) IntLikeProp = FindPropAddr("IntPoint", "X");
-	if (!IntLikeProp) IntLikeProp = FindPropAddr("Rotator", "Pitch");
+    // Find offset in range 0x20-0x60 where intProp has these flags
+    // We use the low 32 bits — even if PropertyFlags is 64-bit, the low 32 are stable
 
-	void* ColorProp = FindPropAddr("Color", "R");
-	if (!ColorProp) ColorProp = FindPropAddr("Color", "r");
+    for (int off = 0x20; off <= 0x60; off += 4)
+    {
+        uint32 intFlags  = GMemory->Read<uint32>(reinterpret_cast<uintptr_t>(intProp)  + off);
+        uint32 boolFlags = GMemory->Read<uint32>(reinterpret_cast<uintptr_t>(boolProp) + off);
 
-	if (!IntLikeProp || !ColorProp)
-	{
-		GLogger.FmtWrite(ELogLevel::Error, "Property.PropertyFlags: missing probe properties\n");
-		return false;
-	}
+        // CPF_Edit = 0x01, CPF_ZeroConstructor = 0x02, CPF_SaveGame = 0x100
+        // Common flags should be set (at minimum CPF_Edit and CPF_SaveGame)
+        constexpr uint32 kCommonFlags = 0x00000001 | 0x00000100; // Edit | SaveGame
 
-	for (const EPropertyFlags V : Variants)
-	{
-		std::vector<std::pair<void*, EPropertyFlags>> Infos = {
-		    {IntLikeProp, Common | V},
-		    {ColorProp,   Common | V | EPropertyFlags::BlueprintVisible}
-		};
-		int32 r = OffsetFinder::FindOffset(Infos);
-		if (r != OffsetFinder::OffsetNotFound)
-		{
-			this->Property.PropertyFlags = r;
-			GLogger.FmtWrite(ELogLevel::Info, "Property.PropertyFlags = 0x{:X}\n", r);
-			return true;
-		}
-	}
+        if ((intFlags & kCommonFlags) == kCommonFlags &&
+            (boolFlags & kCommonFlags) == kCommonFlags)
+        {
+            this->Property.PropertyFlags = off;
+            GLogger.FmtWrite(ELogLevel::Info, "Property.PropertyFlags = 0x{:X}\n", off);
+            return true;
+        }
+    }
 
-	return false;
+    return false;
 }
 
 bool FInGenOffsets::Init_Property_OffsetInternal()
 {
-	this->Property.Offset_Internal = OffsetFinder::OffsetNotFound;
+    this->Property.Offset_Internal = OffsetFinder::OffsetNotFound;
 
-	auto FindPropAddr = [](const char* StructName, const char* MemberName) -> void*
-	{
-		void* a = ObjectArray::FindObjectFastInOuter(MemberName, StructName).GetAddress();
-		if (a) return a;
-		if (UEStruct S = ObjectArray::FindStructFast(StructName))
-			return S.FindMember(MemberName).GetAddress();
-		return nullptr;
-	};
+    void* objPropCls = ObjectArray::FindObjectFast("ObjectProperty").GetAddress();
+    if (!objPropCls) return false;
 
-	auto TryGroup = [this, &FindPropAddr](std::initializer_list<std::pair<const char*, std::pair<const char*, int32_t>>> Members) -> bool
-	{
-		std::vector<std::pair<void*, int32_t>> Infos;
-		for (auto& [SN, MV] : Members)
-		{
-			void* p = FindPropAddr(SN, MV.first);
-			if (!p) return false;
-			Infos.push_back({p, MV.second});
-		}
-		if (Infos.size() < 2) return false;
+    std::vector<void*> instances;
+    for (int i = 0; i < ObjectArray::Num() && instances.size() < 8; i++)
+    {
+        UEObject obj = ObjectArray::GetByIndex(i);
+        if (!obj.GetAddress()) continue;
+        if (obj.GetClass().GetAddress() != objPropCls) continue;
+        instances.push_back(obj.GetAddress());
+    }
 
-		int32 r = OffsetFinder::FindOffset(Infos);
-		if (r != OffsetFinder::OffsetNotFound)
-		{
-			this->Property.Offset_Internal = r;
-			GLogger.FmtWrite(ELogLevel::Info, "Property.Offset_Internal = 0x{:X}\n", r);
-			return true;
-		}
-		return false;
-	};
+    if (instances.size() < 2) return false;
 
-	if (TryGroup({{"Vector", {"X", 0}}, {"Vector", {"Y", 4}}, {"Vector", {"Z", 8}}})) return true;
-	if (TryGroup({{"IntVector", {"X", 0}}, {"IntVector", {"Y", 4}}, {"IntVector", {"Z", 8}}})) return true;
-	if (TryGroup({{"Rotator", {"Pitch", 0}}, {"Rotator", {"Yaw", 4}}, {"Rotator", {"Roll", 8}}})) return true;
-	if (TryGroup({{"Color", {"R", 0}}, {"Color", {"G", 1}}, {"Color", {"B", 2}}})) return true;
-	if (TryGroup({{"IntPoint", {"X", 0}}, {"IntPoint", {"Y", 4}}})) return true;
-	if (TryGroup({{"Vector2D", {"X", 0}}, {"Vector2D", {"Y", 4}}})) return true;
-	if (TryGroup({{"Guid", {"A", 0}}, {"Guid", {"B", 4}}, {"Guid", {"C", 8}}, {"Guid", {"D", 12}}})) return true;
+    for (int off = 0x20; off <= 0x60; off += 4)
+    {
+        bool ok = true;
+        int32 firstVal = 0;
+        bool vary = false;
 
-	return false;
+        for (size_t k = 0; k < instances.size(); k++)
+        {
+            void* p = instances[k];
+            int32 val = GMemory->Read<int32>(reinterpret_cast<uintptr_t>(p) + off);
+
+            if (val < 0 || val > 0x10000) { ok = false; break; }
+
+            void* parent = GMemory->Read<void*>(reinterpret_cast<uintptr_t>(p) + GOffsets.UObject.Outer);
+            if (!parent) { ok = false; break; }
+            int32 parentSize = GMemory->Read<int32>(reinterpret_cast<uintptr_t>(parent) + GOffsets.UStruct.Size);
+            if (parentSize <= 0 || val >= parentSize) { ok = false; break; }
+
+            if (k == 0) firstVal = val;
+            else if (val != firstVal) vary = true;
+        }
+
+        if (ok && vary)
+        {
+            this->Property.Offset_Internal = off;
+            GLogger.FmtWrite(ELogLevel::Info, "Property.Offset_Internal = 0x{:X}\n", off);
+            return true;
+        }
+    }
+    return false;
 }
 
 bool FInGenOffsets::Init_BoolProperty_Base()
