@@ -988,15 +988,13 @@ bool FInGenOffsets::Init_UStruct_Children()
 {
 	this->UStruct.Children = OffsetFinder::OffsetNotFound;
 
-	const bool bHasFField =
-	    ObjectArray::FindObjectFast("Field") != nullptr ||
-	    ObjectArray::FindObjectFast("FField") != nullptr;
+	const bool bHasFField = Init_UStruct_ChildProperties();
 
 	InternalSettings::bUseFProperty = bHasFField;
 
 	GLogger.FmtWrite(ELogLevel::Info, "Init_UStruct_Children: FField system = {}\n",
 	                 bHasFField ? "yes (UE 4.25+)" : "no (legacy UProperty)");
-	
+
 	std::vector<std::pair<void*, void*>> Infos;
 
 	if (!bHasFField)
@@ -1022,7 +1020,6 @@ bool FInGenOffsets::Init_UStruct_Children()
 	this->UStruct.Children = OffsetFinder::FindOffset(Infos);
 	return this->UStruct.Children != OffsetFinder::OffsetNotFound;
 }
-
 bool FInGenOffsets::Init_UStruct_ChildProperties()
 {
 	this->UStruct.ChildProperties = OffsetFinder::OffsetNotFound;
