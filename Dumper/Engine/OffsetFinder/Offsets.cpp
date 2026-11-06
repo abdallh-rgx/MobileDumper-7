@@ -1354,59 +1354,38 @@ bool FInGenOffsets::Init_Property_ElementSize()
 {
 	this->Property.ElementSize = OffsetFinder::OffsetNotFound;
 
-	std::vector<std::pair<void*, int32_t>> Infos;
-
+	auto TryStruct = [this](const char* SN, std::initializer_list<const char*> Members) -> bool
 	{
-		UEStruct S = ObjectArray::FindStructFast("Guid");
-		void* A = S ? S.FindMember("A").GetAddress() : nullptr;
-		void* C = S ? S.FindMember("C").GetAddress() : nullptr;
-		void* D = S ? S.FindMember("D").GetAddress() : nullptr;
-		if (A && C && D)
+		UEStruct S = ObjectArray::FindStructFast(SN);
+		std::vector<std::pair<void*, int32_t>> Infos;
+		for (const char* M : Members)
 		{
-			Infos = {{A, 0x04}, {C, 0x04}, {D, 0x04}};
-			int32 r = OffsetFinder::FindOffset(Infos);
-			if (r != OffsetFinder::OffsetNotFound) { this->Property.ElementSize = r; return true; }
+			void* addr = nullptr;
+			if (S) addr = S.FindMember(M).GetAddress();
+			if (!addr) addr = ObjectArray::FindObjectFastInOuter(M, SN).GetAddress();
+			if (!addr) return false;
+			Infos.push_back({addr, 0x04});
 		}
-	}
-
-	{
-		UEStruct S = ObjectArray::FindStructFast("IntPoint");
-		void* X = S ? S.FindMember("X").GetAddress() : nullptr;
-		void* Y = S ? S.FindMember("Y").GetAddress() : nullptr;
-		if (X && Y)
+		int32 r = OffsetFinder::FindOffset(Infos, 0x20, 0x80);
+		if (r != OffsetFinder::OffsetNotFound)
 		{
-			Infos = {{X, 0x04}, {Y, 0x04}};
-			int32 r = OffsetFinder::FindOffset(Infos);
-			if (r != OffsetFinder::OffsetNotFound) { this->Property.ElementSize = r; return true; }
+			this->Property.ElementSize = r;
+			GLogger.FmtWrite(ELogLevel::Info, "Property.ElementSize = 0x{:X} (via {})\n", r, SN);
+			return true;
 		}
-	}
+		return false;
+	};
 
-	{
-		UEStruct S = ObjectArray::FindStructFast("LinearColor");
-		void* R = S ? S.FindMember("R").GetAddress() : nullptr;
-		void* G = S ? S.FindMember("G").GetAddress() : nullptr;
-		void* B = S ? S.FindMember("B").GetAddress() : nullptr;
-		if (R && G && B)
-		{
-			Infos = {{R, 0x04}, {G, 0x04}, {B, 0x04}};
-			int32 r = OffsetFinder::FindOffset(Infos);
-			if (r != OffsetFinder::OffsetNotFound) { this->Property.ElementSize = r; return true; }
-		}
-	}
+	if (TryStruct("Rotator",    {"Pitch", "Yaw", "Roll"})) return true;
+	if (TryStruct("IntVector",  {"X", "Y", "Z"}))          return true;
+	if (TryStruct("IntPoint",   {"X", "Y"}))               return true;
+	if (TryStruct("Vector",     {"X", "Y", "Z"}))          return true;
+	if (TryStruct("Vector2D",   {"X", "Y"}))               return true;
+	if (TryStruct("Vector4",    {"X", "Y", "Z"}))          return true;
+	if (TryStruct("LinearColor",{"R", "G", "B"}))          return true;
+	if (TryStruct("Guid",       {"A", "C", "D"}))          return true;
 
-	{
-		UEStruct S = ObjectArray::FindStructFast("Vector");
-		void* X = S ? S.FindMember("X").GetAddress() : nullptr;
-		void* Y = S ? S.FindMember("Y").GetAddress() : nullptr;
-		void* Z = S ? S.FindMember("Z").GetAddress() : nullptr;
-		if (X && Y && Z)
-		{
-			Infos = {{X, 0x04}, {Y, 0x04}, {Z, 0x04}};
-			int32 r = OffsetFinder::FindOffset(Infos);
-			if (r != OffsetFinder::OffsetNotFound) { this->Property.ElementSize = r; return true; }
-		}
-	}
-
+	GLogger.FmtWrite(ELogLevel::Error, "Property.ElementSize: all structs failed\n");
 	return false;
 }
 
@@ -1420,50 +1399,38 @@ bool FInGenOffsets::Init_Property_ArrayDim()
 		return false;
 	}
 
-	const int32_t FFieldMax = std::max({FField.Vft, FField.Class, FField.Owner,
-	                                    FField.Next, FField.Name, FField.EditorOnlyMetadata});
-	const int32_t MinOffset = InternalSettings::bUseFProperty ? FFieldMax + 4 : this->UField.Next + sizeof(void*);
+	const int32_t MinOffset = this->UField.Next + int32_t(sizeof(void*));
 	const int32_t MaxOffset = this->Property.ElementSize + 0x10;
 
-	std::vector<std::pair<void*, int32_t>> Infos;
-
+	auto TryStruct = [this, MinOffset, MaxOffset](const char* SN, std::initializer_list<const char*> Members) -> bool
 	{
-		UEStruct S = ObjectArray::FindStructFast("Guid");
-		void* A = S ? S.FindMember("A").GetAddress() : nullptr;
-		void* C = S ? S.FindMember("C").GetAddress() : nullptr;
-		void* D = S ? S.FindMember("D").GetAddress() : nullptr;
-		if (A && C && D)
+		UEStruct S = ObjectArray::FindStructFast(SN);
+		std::vector<std::pair<void*, int32_t>> Infos;
+		for (const char* M : Members)
 		{
-			Infos = {{A, 0x01}, {C, 0x01}, {D, 0x01}};
-			int32 r = OffsetFinder::FindOffset(Infos, MinOffset, MaxOffset);
-			if (r != OffsetFinder::OffsetNotFound) { this->Property.ArrayDim = r; return true; }
+			void* addr = nullptr;
+			if (S) addr = S.FindMember(M).GetAddress();
+			if (!addr) addr = ObjectArray::FindObjectFastInOuter(M, SN).GetAddress();
+			if (!addr) return false;
+			Infos.push_back({addr, 0x01});
 		}
-	}
+		int32 r = OffsetFinder::FindOffset(Infos, MinOffset, MaxOffset);
+		if (r != OffsetFinder::OffsetNotFound)
+		{
+			this->Property.ArrayDim = r;
+			GLogger.FmtWrite(ELogLevel::Info, "Property.ArrayDim = 0x{:X} (via {})\n", r, SN);
+			return true;
+		}
+		return false;
+	};
 
-	{
-		UEStruct S = ObjectArray::FindStructFast("IntPoint");
-		void* X = S ? S.FindMember("X").GetAddress() : nullptr;
-		void* Y = S ? S.FindMember("Y").GetAddress() : nullptr;
-		if (X && Y)
-		{
-			Infos = {{X, 0x01}, {Y, 0x01}};
-			int32 r = OffsetFinder::FindOffset(Infos, MinOffset, MaxOffset);
-			if (r != OffsetFinder::OffsetNotFound) { this->Property.ArrayDim = r; return true; }
-		}
-	}
-
-	{
-		UEStruct S = ObjectArray::FindStructFast("LinearColor");
-		void* R = S ? S.FindMember("R").GetAddress() : nullptr;
-		void* G = S ? S.FindMember("G").GetAddress() : nullptr;
-		void* B = S ? S.FindMember("B").GetAddress() : nullptr;
-		if (R && G && B)
-		{
-			Infos = {{R, 0x01}, {G, 0x01}, {B, 0x01}};
-			int32 r = OffsetFinder::FindOffset(Infos, MinOffset, MaxOffset);
-			if (r != OffsetFinder::OffsetNotFound) { this->Property.ArrayDim = r; return true; }
-		}
-	}
+	if (TryStruct("Rotator",    {"Pitch", "Yaw", "Roll"})) return true;
+	if (TryStruct("IntVector",  {"X", "Y", "Z"}))          return true;
+	if (TryStruct("IntPoint",   {"X", "Y"}))               return true;
+	if (TryStruct("Vector",     {"X", "Y", "Z"}))          return true;
+	if (TryStruct("Vector2D",   {"X", "Y"}))               return true;
+	if (TryStruct("LinearColor",{"R", "G", "B"}))          return true;
+	if (TryStruct("Guid",       {"A", "C", "D"}))          return true;
 
 	return false;
 }
@@ -1472,47 +1439,53 @@ bool FInGenOffsets::Init_Property_PropertyFlags()
 {
 	this->Property.PropertyFlags = OffsetFinder::OffsetNotFound;
 
-	const UEStruct Color = ObjectArray::FindStructFast("Color");
-	const UEStruct Guid  = ObjectArray::FindStructFast("Guid");
-	const UEStruct IntP  = ObjectArray::FindStructFast("IntPoint");
+	auto FindMemberAddr = [](UEStruct S, const char* SN, const char* M) -> void*
+	{
+		void* addr = nullptr;
+		if (S) addr = S.FindMember(M).GetAddress();
+		if (!addr) addr = ObjectArray::FindObjectFastInOuter(M, SN).GetAddress();
+		return addr;
+	};
 
-	constexpr EPropertyFlags CommonFlags =
-	    EPropertyFlags::Edit |
-	    EPropertyFlags::ZeroConstructor |
-	    EPropertyFlags::SaveGame |
-	    EPropertyFlags::IsPlainOldData |
+	constexpr EPropertyFlags Common =
+	    EPropertyFlags::Edit | EPropertyFlags::ZeroConstructor |
+	    EPropertyFlags::SaveGame | EPropertyFlags::IsPlainOldData |
 	    EPropertyFlags::HasGetValueTypeHash;
 
-	constexpr EPropertyFlags GuidFlags  = CommonFlags;
-	constexpr EPropertyFlags ColorFlags = CommonFlags | EPropertyFlags::BlueprintVisible;
-
-	constexpr std::array<EPropertyFlags, 4> FlagVariants = {
+	constexpr std::array<EPropertyFlags, 4> Variants = {
 	    EPropertyFlags::NoDestructor,
 	    EPropertyFlags::NoDestructor | EPropertyFlags::NativeAccessSpecifierPublic,
 	    EPropertyFlags::None,
 	    EPropertyFlags::NativeAccessSpecifierPublic};
 
+	UEStruct RotS = ObjectArray::FindStructFast("Rotator");
+	UEStruct IntS = ObjectArray::FindStructFast("IntVector");
+	UEStruct ColS = ObjectArray::FindStructFast("Color");
+
 	void* IntLikeProp = nullptr;
-	if (Guid) IntLikeProp = Guid.FindMember("A").GetAddress();
-	if (!IntLikeProp && IntP) IntLikeProp = IntP.FindMember("X").GetAddress();
+	if (IntS) IntLikeProp = IntS.FindMember("X").GetAddress();
+	if (!IntLikeProp && RotS) IntLikeProp = RotS.FindMember("Pitch").GetAddress();
 
-	void* ColorR = Color ? Color.FindMember("R").GetAddress() : nullptr;
-	if (!ColorR && Color) ColorR = Color.FindMember("r").GetAddress();
+	void* ColorProp = nullptr;
+	if (ColS) ColorProp = ColS.FindMember("R").GetAddress();
 
-	if (!IntLikeProp || !ColorR)
+	if (!IntLikeProp || !ColorProp)
+	{
+		GLogger.FmtWrite(ELogLevel::Error, "Property.PropertyFlags: missing probe properties\n");
 		return false;
+	}
 
-	for (const EPropertyFlags Variant : FlagVariants)
+	for (const EPropertyFlags V : Variants)
 	{
 		std::vector<std::pair<void*, EPropertyFlags>> Infos = {
-		    {IntLikeProp, GuidFlags  | Variant},
-		    {ColorR,      ColorFlags | Variant}
+		    {IntLikeProp, Common | V},
+		    {ColorProp,   Common | V | EPropertyFlags::BlueprintVisible}
 		};
-
-		const int FlagsOffset = OffsetFinder::FindOffset(Infos);
-		if (FlagsOffset != OffsetFinder::OffsetNotFound)
+		int32 r = OffsetFinder::FindOffset(Infos);
+		if (r != OffsetFinder::OffsetNotFound)
 		{
-			this->Property.PropertyFlags = FlagsOffset;
+			this->Property.PropertyFlags = r;
+			GLogger.FmtWrite(ELogLevel::Info, "Property.PropertyFlags = 0x{:X}\n", r);
 			return true;
 		}
 	}
@@ -1524,52 +1497,35 @@ bool FInGenOffsets::Init_Property_OffsetInternal()
 {
 	this->Property.Offset_Internal = OffsetFinder::OffsetNotFound;
 
-	std::vector<std::pair<void*, int32_t>> Infos;
-
+	auto TryPair = [this](const char* SN, std::initializer_list<std::pair<const char*, int32_t>> Members) -> bool
 	{
-		UEStruct Color = ObjectArray::FindStructFast("Color");
-		UEStruct Guid  = ObjectArray::FindStructFast("Guid");
-		void* B = Color ? Color.FindMember("B").GetAddress() : nullptr;
-		void* G = Color ? Color.FindMember("G").GetAddress() : nullptr;
-		void* C = Guid  ? Guid.FindMember("C").GetAddress()  : nullptr;
-		if (B && G && C)
+		UEStruct S = ObjectArray::FindStructFast(SN);
+		std::vector<std::pair<void*, int32_t>> Infos;
+		for (auto& [M, Val] : Members)
 		{
-			Infos = {{B, 0x00}, {G, 0x01}, {C, 0x08}};
-			int32 r = OffsetFinder::FindOffset(Infos);
-			if (r != OffsetFinder::OffsetNotFound) { this->Property.Offset_Internal = r; return true; }
+			void* addr = nullptr;
+			if (S) addr = S.FindMember(M).GetAddress();
+			if (!addr) addr = ObjectArray::FindObjectFastInOuter(M, SN).GetAddress();
+			if (!addr) return false;
+			Infos.push_back({addr, Val});
 		}
-		if (B && G)
+		int32 r = OffsetFinder::FindOffset(Infos);
+		if (r != OffsetFinder::OffsetNotFound)
 		{
-			Infos = {{B, 0x00}, {G, 0x01}};
-			int32 r = OffsetFinder::FindOffset(Infos);
-			if (r != OffsetFinder::OffsetNotFound) { this->Property.Offset_Internal = r; return true; }
+			this->Property.Offset_Internal = r;
+			GLogger.FmtWrite(ELogLevel::Info, "Property.Offset_Internal = 0x{:X} (via {})\n", r, SN);
+			return true;
 		}
-	}
+		return false;
+	};
 
-	{
-		UEStruct S = ObjectArray::FindStructFast("IntPoint");
-		void* X = S ? S.FindMember("X").GetAddress() : nullptr;
-		void* Y = S ? S.FindMember("Y").GetAddress() : nullptr;
-		if (X && Y)
-		{
-			Infos = {{X, 0x00}, {Y, 0x04}};
-			int32 r = OffsetFinder::FindOffset(Infos);
-			if (r != OffsetFinder::OffsetNotFound) { this->Property.Offset_Internal = r; return true; }
-		}
-	}
-
-	{
-		UEStruct S = ObjectArray::FindStructFast("LinearColor");
-		void* R = S ? S.FindMember("R").GetAddress() : nullptr;
-		void* G = S ? S.FindMember("G").GetAddress() : nullptr;
-		void* B = S ? S.FindMember("B").GetAddress() : nullptr;
-		if (R && G && B)
-		{
-			Infos = {{R, 0x00}, {G, 0x04}, {B, 0x08}};
-			int32 r = OffsetFinder::FindOffset(Infos);
-			if (r != OffsetFinder::OffsetNotFound) { this->Property.Offset_Internal = r; return true; }
-		}
-	}
+	if (TryPair("IntVector",  {{"X", 0x00}, {"Y", 0x04}, {"Z", 0x08}})) return true;
+	if (TryPair("IntPoint",   {{"X", 0x00}, {"Y", 0x04}}))               return true;
+	if (TryPair("Vector",     {{"X", 0x00}, {"Y", 0x04}, {"Z", 0x08}})) return true;
+	if (TryPair("Vector2D",   {{"X", 0x00}, {"Y", 0x04}}))               return true;
+	if (TryPair("LinearColor",{{"R", 0x00}, {"G", 0x04}, {"B", 0x08}})) return true;
+	if (TryPair("Color",      {{"B", 0x00}, {"G", 0x01}}))               return true;
+	if (TryPair("Guid",       {{"A", 0x00}, {"C", 0x08}}))               return true;
 
 	return false;
 }
