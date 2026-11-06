@@ -1,6 +1,8 @@
 #include "Generator.h"
 
 #include <algorithm>
+#include <csetjmp>
+#include <csignal>
 #include <ctime>
 #include <fstream>
 #include <string>
@@ -23,6 +25,42 @@
 #include "../Managers/MemberManager.h"
 #include "../Managers/PackageManager.h"
 #include "../Managers/StructManager.h"
+
+static thread_local sigjmp_buf g_PoolSafeJmp;
+static thread_local volatile sig_atomic_t g_PoolCanJump = 0;
+static bool g_PoolHandlersInstalled = false;
+
+static void PoolSafeHandler(int)
+{
+	if (g_PoolCanJump) { g_PoolCanJump = 0; siglongjmp(g_PoolSafeJmp, 1); }
+}
+
+static void InstallPoolGuards()
+{
+	if (g_PoolHandlersInstalled) return;
+	g_PoolHandlersInstalled = true;
+	struct sigaction sa;
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = PoolSafeHandler;
+	sa.sa_flags = SA_NODEFER;
+	sigemptyset(&sa.sa_mask);
+	sigaction(SIGSEGV, &sa, nullptr);
+	sigaction(SIGBUS,  &sa, nullptr);
+	sigaction(SIGILL,  &sa, nullptr);
+}
+
+static bool SafeGetString(int32_t idx, std::string& Out)
+{
+	if (sigsetjmp(g_PoolSafeJmp, 1) == 0) {
+		g_PoolCanJump = 1;
+		Out = NameArray::GetNameEntry(idx).GetString();
+		g_PoolCanJump = 0;
+		return true;
+	}
+	g_PoolCanJump = 0;
+	Out.clear();
+	return false;
+}
 
 bool Generator::InitUnrealModule(std::string& OutErrorString)
 {
@@ -981,8 +1019,14 @@ void Generator::GenerateNameIndexHeader()
 		constexpr int32 PoolScanLimit = 3000;
 		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 4-pool scan 0..{}\n", PoolScanLimit);
 
+		InstallPoolGuards();
+
+		const int32 LenShift = InternalSettings::bUseOutlineNumberName ? 6 : 1;
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 4a-LenShift={}\n", LenShift);
+
 		int32 PoolAdded   = 0;
 		int32 PoolSkipped = 0;
+		int32 PoolCrashed = 0;
 		int32 EmptyStreak = 0;
 
 		for (int32 i = 0; i < PoolScanLimit; i++)
@@ -1009,7 +1053,7 @@ void Generator::GenerateNameIndexHeader()
 			}
 
 			const uint16 Hdr = GMemory->Read<uint16>(EntryAddr);
-			const int32  Len = static_cast<int32>(Hdr >> 6);
+			const int32  Len = static_cast<int32>(Hdr >> LenShift);
 
 			if (Len == 0 || Len > 200)
 			{
@@ -1020,11 +1064,13 @@ void Generator::GenerateNameIndexHeader()
 			}
 
 			std::string NameStr;
-			try
+			if (!SafeGetString(i, NameStr))
 			{
-				NameStr = NameArray::GetNameEntry(i).GetString();
+				PoolCrashed++;
+				EmptyStreak++;
+				if (EmptyStreak > 500) break;
+				continue;
 			}
-			catch (...) { NameStr.clear(); }
 
 			if (NameStr.empty() || NameStr.size() > 200)
 			{
@@ -1048,7 +1094,8 @@ void Generator::GenerateNameIndexHeader()
 			}
 		}
 
-		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 5-pool done, +{} new, {} skipped\n", PoolAdded, PoolSkipped);
+		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 5-pool done, +{} new, {} skipped, {} crashed\n",
+		                 PoolAdded, PoolSkipped, PoolCrashed);
 		GLogger.FmtWrite(ELogLevel::Info, "GNIH: 6-total {}\n", (int)NameToIdx.size());
 
 		std::vector<std::pair<int32_t, std::string>> Data;
