@@ -43,14 +43,14 @@ public:
         Offsets.UStruct.Children = 0x48;
         Offsets.UStruct.Size = 0x58;
         Offsets.UStruct.MinAlignment = 0x5C;
-        Offsets.UStruct.ChildProperties = OffsetFinder::OffsetNotFound;
+        Offsets.UStruct.ChildProperties = -1;
 
         Offsets.UClass.CastFlags = 0xE8;
         Offsets.UClass.ClassDefaultObject = 0x130;
         Offsets.UClass.ImplementedInterfaces = 0x220;
 
         Offsets.UEnum.Names = 0x40;
-        Offsets.UEnum.UnderlyingType = OffsetFinder::OffsetNotFound;
+        Offsets.UEnum.UnderlyingType = -1;
 
         Offsets.UFunction.FunctionFlags = 0xC8;
         Offsets.UFunction.NumParams = 0xCC;
@@ -73,14 +73,14 @@ public:
         Offsets.SetProperty.ElementProp = 0x70;
         Offsets.ByteProperty.Enum = 0x70;
 
-        Offsets.FField.Vft = OffsetFinder::OffsetNotFound;
-        Offsets.FField.Class = OffsetFinder::OffsetNotFound;
-        Offsets.FField.Owner = OffsetFinder::OffsetNotFound;
-        Offsets.FField.Next = OffsetFinder::OffsetNotFound;
-        Offsets.FField.Name = OffsetFinder::OffsetNotFound;
-        Offsets.FField.EditorOnlyMetadata = OffsetFinder::OffsetNotFound;
-        Offsets.FFieldClass.CastFlags = OffsetFinder::OffsetNotFound;
-        Offsets.FFieldClass.Name = OffsetFinder::OffsetNotFound;
+        Offsets.FField.Vft = -1;
+        Offsets.FField.Class = -1;
+        Offsets.FField.Owner = -1;
+        Offsets.FField.Next = -1;
+        Offsets.FField.Name = -1;
+        Offsets.FField.EditorOnlyMetadata = -1;
+        Offsets.FFieldClass.CastFlags = -1;
+        Offsets.FFieldClass.Name = -1;
 
         InternalSettings::bUseFProperty = false;
     }
