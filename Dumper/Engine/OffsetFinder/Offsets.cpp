@@ -999,17 +999,31 @@ bool FInGenOffsets::Init_UStruct_Children()
 
 	if (!bHasFField)
 	{
-		Infos.push_back({ObjectArray::FindObjectFast("Vector").GetAddress(), ObjectArray::FindObjectFastInOuter("X", "Vector").GetAddress()});
-		Infos.push_back({ObjectArray::FindObjectFast("Vector4").GetAddress(), ObjectArray::FindObjectFastInOuter("X", "Vector4").GetAddress()});
-		Infos.push_back({ObjectArray::FindObjectFast("Vector2D").GetAddress(), ObjectArray::FindObjectFastInOuter("X", "Vector2D").GetAddress()});
-		Infos.push_back({ObjectArray::FindObjectFast("Guid").GetAddress(), ObjectArray::FindObjectFastInOuter("A", "Guid").GetAddress()});
+		void* Vec   = ObjectArray::FindObjectFast("Vector").GetAddress();
+		void* Vec4  = ObjectArray::FindObjectFast("Vector4").GetAddress();
+		void* Vec2D = ObjectArray::FindObjectFast("Vector2D").GetAddress();
+		void* Guid  = ObjectArray::FindObjectFast("Guid").GetAddress();
 
-		this->UStruct.Children = OffsetFinder::FindOffset(Infos, 0x14);
-		if (this->UStruct.Children != OffsetFinder::OffsetNotFound)
+		void* VecX   = ObjectArray::FindObjectFastInOuter("X", "Vector").GetAddress();
+		void* Vec4X  = ObjectArray::FindObjectFastInOuter("X", "Vector4").GetAddress();
+		void* Vec2DX = ObjectArray::FindObjectFastInOuter("X", "Vector2D").GetAddress();
+		void* GuidA  = ObjectArray::FindObjectFastInOuter("A", "Guid").GetAddress();
+
+		if (Vec && Vec4 && Vec2D && Guid && VecX && Vec4X && Vec2DX && GuidA)
 		{
-			GLogger.FmtWrite(ELogLevel::Info, "Init_UStruct_Children: legacy UProperty chain at 0x{:X}\n",
-			                 (uint32_t)this->UStruct.Children);
-			return true;
+			Infos.push_back({Vec,   VecX});
+			Infos.push_back({Vec4,  Vec4X});
+			Infos.push_back({Vec2D, Vec2DX});
+			Infos.push_back({Guid,  GuidA});
+
+			const int32 Found = OffsetFinder::FindOffset(Infos, 0x14);
+			if (Found != OffsetFinder::OffsetNotFound && Found >= 0x40 && Found <= 0x60)
+			{
+				this->UStruct.Children = Found;
+				GLogger.FmtWrite(ELogLevel::Info, "Init_UStruct_Children: legacy UProperty chain at 0x{:X}\n",
+				                 (uint32_t)this->UStruct.Children);
+				return true;
+			}
 		}
 	}
 
@@ -1020,6 +1034,7 @@ bool FInGenOffsets::Init_UStruct_Children()
 	this->UStruct.Children = OffsetFinder::FindOffset(Infos);
 	return this->UStruct.Children != OffsetFinder::OffsetNotFound;
 }
+
 bool FInGenOffsets::Init_UStruct_ChildProperties()
 {
 	this->UStruct.ChildProperties = OffsetFinder::OffsetNotFound;
