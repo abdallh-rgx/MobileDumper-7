@@ -988,11 +988,6 @@ bool FInGenOffsets::Init_UStruct_Children()
 {
 	this->UStruct.Children = OffsetFinder::OffsetNotFound;
 
-	std::vector<std::pair<void*, void*>> Infos;
-
-	bool FInGenOffsets::Init_UStruct_Children()
-	this->UStruct.Children = OffsetFinder::OffsetNotFound;
-
 	const bool bHasFField =
 	    ObjectArray::FindObjectFast("Field") != nullptr ||
 	    ObjectArray::FindObjectFast("FField") != nullptr;
@@ -1023,24 +1018,6 @@ bool FInGenOffsets::Init_UStruct_Children()
 	Infos.clear();
 	Infos.push_back({ObjectArray::FindObjectFast("PlayerController").GetAddress(), ObjectArray::FindObjectFastInOuter("WasInputKeyJustReleased", "PlayerController").GetAddress()});
 	Infos.push_back({ObjectArray::FindObjectFast("Controller").GetAddress(), ObjectArray::FindObjectFastInOuter("UnPossess", "Controller").GetAddress()});
-
-	this->UStruct.Children = OffsetFinder::FindOffset(Infos);
-	return this->UStruct.Children != OffsetFinder::OffsetNotFound;
-}
-	{
-		Infos.push_back({ObjectArray::FindObjectFast("Vector").GetAddress(), ObjectArray::FindObjectFastInOuter("X", "Vector").GetAddress()});
-		Infos.push_back({ObjectArray::FindObjectFast("Vector4").GetAddress(), ObjectArray::FindObjectFastInOuter("X", "Vector4").GetAddress()});
-		Infos.push_back({ObjectArray::FindObjectFast("Vector2D").GetAddress(), ObjectArray::FindObjectFastInOuter("X", "Vector2D").GetAddress()});
-		Infos.push_back({ObjectArray::FindObjectFast("Guid").GetAddress(), ObjectArray::FindObjectFastInOuter("A", "Guid").GetAddress()});
-
-		this->UStruct.Children = OffsetFinder::FindOffset(Infos, 0x14);
-		return this->UStruct.Children != OffsetFinder::OffsetNotFound;
-	}
-
-	Infos.push_back({ObjectArray::FindObjectFast("PlayerController").GetAddress(), ObjectArray::FindObjectFastInOuter("WasInputKeyJustReleased", "PlayerController").GetAddress()});
-	Infos.push_back({ObjectArray::FindObjectFast("Controller").GetAddress(), ObjectArray::FindObjectFastInOuter("UnPossess", "Controller").GetAddress()});
-
-	InternalSettings::bUseFProperty = true;
 
 	this->UStruct.Children = OffsetFinder::FindOffset(Infos);
 	return this->UStruct.Children != OffsetFinder::OffsetNotFound;
